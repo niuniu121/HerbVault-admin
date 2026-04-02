@@ -300,7 +300,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import * as XLSX from 'xlsx'
-import { auth } from '../services/firebase'
+import { auth, db } from '../services/firebase'
 import {
   collection,
   getDocs,
@@ -312,11 +312,11 @@ import {
   query,
   where,
 } from 'firebase/firestore'
-import { db } from '../services/firebase'
 import { herbSeeds } from '../data/herbSeeds.js'
 
 const HERBS = 'herbs'
 const LOGS = 'stock_logs'
+const LOW_STOCK_THRESHOLD = 3
 
 const sortMode = ref('default')
 const searchKeyword = ref('')
@@ -352,6 +352,15 @@ const newHerb = ref({
   unit: '瓶',
 })
 
+const IS_LOCAL_DEV =
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+
+// 本地开发时走线上已部署好的 Cloudflare function；
+// 线上部署时走同域 /api/send-telegram-alert
+const ALERT_API_URL = IS_LOCAL_DEV
+  ? 'https://herbvault-admin.pages.dev/api/send-telegram-alert'
+  : '/api/send-telegram-alert'
+
 function getOperator() {
   return {
     uid: auth.currentUser?.uid || '',
@@ -375,6 +384,7 @@ async function loadPageData() {
       id: d.id,
       ...d.data(),
       editStock: Number(d.data().stock || 0),
+      lowStockAlertSent: d.data().lowStockAlertSent === true,
     }))
   } catch (e) {
     console.error('loadPageData error:', e)
@@ -441,16 +451,78 @@ function decreaseStock(h) {
   h.editStock = Math.max(0, h.editStock - 1)
 }
 
+async function sendLowStockTelegramAlert(herbName, currentStock) {
+  const message = `🚨 Low Stock Alert
+
+Herb: ${herbName}
+Current Stock: ${currentStock}
+Threshold: ≤ ${LOW_STOCK_THRESHOLD}
+
+Please restock soon.`
+
+  const response = await fetch(ALERT_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message }),
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data?.message || `Telegram alert failed (${response.status})`)
+  }
+
+  return data
+}
+
+async function syncLowStockAlertStatus(herb, finalStock) {
+  try {
+    const alreadySent = herb.lowStockAlertSent === true
+
+    if (finalStock <= LOW_STOCK_THRESHOLD && !alreadySent) {
+      await sendLowStockTelegramAlert(herb.nameCn, finalStock)
+
+      await updateDoc(doc(db, HERBS, herb.id), {
+        lowStockAlertSent: true,
+        lowStockThreshold: LOW_STOCK_THRESHOLD,
+      })
+
+      herb.lowStockAlertSent = true
+      return
+    }
+
+    if (finalStock > LOW_STOCK_THRESHOLD && alreadySent) {
+      await updateDoc(doc(db, HERBS, herb.id), {
+        lowStockAlertSent: false,
+        lowStockThreshold: LOW_STOCK_THRESHOLD,
+      })
+
+      herb.lowStockAlertSent = false
+      return
+    }
+
+    if (finalStock > LOW_STOCK_THRESHOLD && !alreadySent) {
+      herb.lowStockAlertSent = false
+    }
+  } catch (e) {
+    console.error('syncLowStockAlertStatus error:', e)
+    showToast('Stock saved, but alert failed', 'error')
+  }
+}
+
 async function saveStock(herb) {
   try {
     savingId.value = herb.id
 
-    const finalStock = Number(herb.editStock || 0)
+    const finalStock = Math.max(0, Number(herb.editStock || 0))
     const delta = finalStock - Number(herb.stock || 0)
 
     await updateDoc(doc(db, HERBS, herb.id), {
       stock: finalStock,
       unit: '瓶',
+      lowStockThreshold: LOW_STOCK_THRESHOLD,
       updatedAt: serverTimestamp(),
     })
 
@@ -470,6 +542,9 @@ async function saveStock(herb) {
     herb.editStock = finalStock
 
     showToast('Saved')
+
+    // 不阻塞主保存
+    syncLowStockAlertStatus(herb, finalStock)
   } catch (e) {
     console.error('saveStock error:', e)
     showToast('Save failed', 'error')
@@ -545,7 +620,8 @@ async function confirmAddCategory() {
       defaultOrder: 1,
       stock: 0,
       unit: '瓶',
-      lowStockThreshold: 3,
+      lowStockThreshold: LOW_STOCK_THRESHOLD,
+      lowStockAlertSent: false,
       isActive: true,
       createdAt: serverTimestamp(),
     })
@@ -579,7 +655,7 @@ async function confirmAddHerb() {
   try {
     const name = newHerb.value.nameCn.trim()
     const category = newHerb.value.category
-    const stock = Number(newHerb.value.stock || 0)
+    const stock = Math.max(0, Number(newHerb.value.stock || 0))
 
     if (!name) {
       showToast('Please enter herb name', 'error')
@@ -609,7 +685,8 @@ async function confirmAddHerb() {
       defaultOrder: nextDefaultOrder,
       stock,
       unit: '瓶',
-      lowStockThreshold: 3,
+      lowStockThreshold: LOW_STOCK_THRESHOLD,
+      lowStockAlertSent: false,
       isActive: true,
       createdAt: serverTimestamp(),
     })
@@ -640,6 +717,8 @@ async function handleImportSeeds() {
         ...item,
         stock: item.stock || 0,
         unit: '瓶',
+        lowStockThreshold: LOW_STOCK_THRESHOLD,
+        lowStockAlertSent: false,
         createdAt: serverTimestamp(),
       })
     }
@@ -673,7 +752,6 @@ async function handleExcelImport(event) {
     }
 
     let updatedCount = 0
-    let createdLogs = 0
 
     for (const row of rows) {
       const herbName = String(row.name || row.Name || row.herb || row.药名 || '').trim()
@@ -695,11 +773,19 @@ async function handleExcelImport(event) {
       const herbData = targetDoc.data()
       const currentStock = Number(herbData.stock || 0)
       const nextStock = currentStock + quantity
+      const alreadySent = herbData.lowStockAlertSent === true
 
-      await updateDoc(doc(db, HERBS, targetDoc.id), {
+      const updatePayload = {
         stock: nextStock,
+        lowStockThreshold: LOW_STOCK_THRESHOLD,
         updatedAt: serverTimestamp(),
-      })
+      }
+
+      if (nextStock > LOW_STOCK_THRESHOLD && alreadySent) {
+        updatePayload.lowStockAlertSent = false
+      }
+
+      await updateDoc(doc(db, HERBS, targetDoc.id), updatePayload)
 
       await addDoc(collection(db, LOGS), {
         herbId: targetDoc.id,
@@ -715,7 +801,6 @@ async function handleExcelImport(event) {
       })
 
       updatedCount++
-      createdLogs++
     }
 
     if (updatedCount === 0) {

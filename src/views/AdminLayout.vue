@@ -25,24 +25,22 @@
           <span>History</span>
         </RouterLink>
 
-        <RouterLink to="/settings" class="nav-link">
+        <!-- <RouterLink to="/settings" class="nav-link">
           <span class="nav-icon">⚙</span>
           <span>Settings</span>
-        </RouterLink>
+        </RouterLink> -->
       </nav>
     </aside>
 
     <main class="main-area">
       <header class="topbar">
         <div>
-          <p class="topbar-label">Herbal Inventory</p>
-          <h2 class="topbar-title">Dashboard Overview</h2>
+          <h2 class="topbar-title">Herbal Inventory</h2>
         </div>
 
         <div class="topbar-right">
           <div class="status-pill">
-            <span class="dot"></span>
-            <span>System Ready</span>
+            <button class="logout-btn" @click="handleLogout">⎋ Logout</button>
           </div>
         </div>
       </header>
@@ -55,7 +53,16 @@
 </template>
 
 <script setup>
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
+const router = useRouter()
+const handleLogout = () => {
+  // 1. 清除登录信息（根据你项目来）
+  localStorage.removeItem('token') // 如果你存了 token
+  localStorage.removeItem('user')
+
+  // 2. 跳转登录页
+  router.push('/login')
+}
 </script>
 
 <style scoped>
@@ -265,5 +272,30 @@ import { RouterLink } from 'vue-router'
   .status-pill {
     display: none;
   }
+}
+
+.logout-btn {
+  border: none;
+  background: linear-gradient(135deg, #174c3c, #2f7d5c);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 6px 14px rgba(23, 76, 60, 0.2);
+}
+
+/* hover */
+.logout-btn:hover {
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 10px 20px rgba(23, 76, 60, 0.28);
+  background: linear-gradient(135deg, #1f6a53, #3aa87b);
+}
+
+/* 点击效果 */
+.logout-btn:active {
+  transform: scale(0.95);
 }
 </style>

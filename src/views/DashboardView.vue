@@ -142,7 +142,6 @@
         <div class="panel-head">
           <div>
             <h3>Least Used Herbs (60 Days)</h3>
-            <p class="panel-note">Low movement analysis based on recent 60-day usage</p>
           </div>
           <span class="panel-badge neutral">
             {{ leastUsedHerbs.length > 0 ? `${leastUsedHerbs.length} items` : 'No data' }}
