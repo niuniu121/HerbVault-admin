@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import LoginView from '../views/LoginView.vue'
 import AdminLayout from '../views/AdminLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
 import HerbListView from '../views/HerbListView.vue'
@@ -8,12 +9,17 @@ import SettingsView from '../views/SettingsView.vue'
 const routes = [
   {
     path: '/',
+    redirect: '/login',
+  },
+  {
+    path: '/login',
+    name: 'login',
+    component: LoginView,
+  },
+  {
+    path: '/',
     component: AdminLayout,
     children: [
-      {
-        path: '',
-        redirect: '/dashboard',
-      },
       {
         path: 'dashboard',
         name: 'dashboard',

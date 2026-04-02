@@ -30,13 +30,6 @@
           <span>Settings</span>
         </RouterLink>
       </nav>
-
-      <div class="sidebar-footer">
-        <div class="footer-card">
-          <p class="footer-title">Inventory Status</p>
-          <p class="footer-text">Manage herbs, stock changes, and alerts in one place.</p>
-        </div>
-      </div>
     </aside>
 
     <main class="main-area">
