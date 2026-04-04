@@ -452,7 +452,7 @@ function decreaseStock(h) {
 }
 
 async function sendLowStockTelegramAlert(herbName, currentStock) {
-  const message = `🚨 Low Stock Alert
+  const message = ` Low Stock Alert
 
 Herb: ${herbName}
 Current Stock: ${currentStock}
