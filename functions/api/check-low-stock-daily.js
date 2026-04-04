@@ -124,7 +124,11 @@ function getField(fields, key, fallback = null) {
 }
 
 function buildTelegramMessage(items, dateKey, threshold) {
-  const lines = items.map((item, index) => {
+  const MAX_ITEMS = 50
+  const visibleItems = items.slice(0, MAX_ITEMS)
+  const hiddenCount = Math.max(items.length - MAX_ITEMS, 0)
+
+  const lines = visibleItems.map((item, index) => {
     return `${index + 1}. ${item.name}｜${item.stock} bottles｜${item.category}`
   })
 
@@ -132,13 +136,18 @@ function buildTelegramMessage(items, dateKey, threshold) {
     '📦 HerbVault Daily Low Stock Check',
     `📅 Date: ${dateKey}`,
     `⚠️ Threshold: <= ${threshold} bottles`,
+    `📊 Total low stock items: ${items.length}`,
     '',
-    'The following herbs need restocking:',
+    'Top items needing restock:',
     '',
     ...lines,
+    hiddenCount > 0 ? '' : null,
+    hiddenCount > 0 ? `...and ${hiddenCount} more items.` : null,
     '',
     'Please restock soon.',
-  ].join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 async function fetchHerbs(env) {
