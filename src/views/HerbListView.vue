@@ -62,7 +62,6 @@
       <div class="summary-top">
         <div>
           <h3>Herb Stock Overview</h3>
-          <p>Grouped by category. Quantities update live while you edit stock below.</p>
         </div>
         <span class="summary-total">{{ summaryHerbCount }} herbs</span>
       </div>
