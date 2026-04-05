@@ -57,6 +57,52 @@
       </select>
     </section>
 
+    <!-- 新增：库存总览折叠区 -->
+    <section v-if="!loading" class="summary-card">
+      <div class="summary-top">
+        <div>
+          <h3>Herb Stock Overview</h3>
+          <p>Grouped by category. Quantities update live while you edit stock below.</p>
+        </div>
+        <span class="summary-total">{{ summaryHerbCount }} herbs</span>
+      </div>
+
+      <div v-if="summaryGroups.length" class="summary-groups">
+        <div v-for="group in summaryGroups" :key="group.category" class="summary-group-item">
+          <button class="summary-group-trigger" @click="toggleSummaryCategory(group.category)">
+            <div class="summary-group-left">
+              <span
+                class="summary-chevron"
+                :class="{ open: isSummaryCategoryOpen(group.category) }"
+              >
+                ▾
+              </span>
+              <span class="summary-group-name">{{ group.category }}</span>
+            </div>
+
+            <div class="summary-group-right">
+              <span class="summary-group-count">{{ group.herbs.length }} herbs</span>
+            </div>
+          </button>
+
+          <transition name="expand-fade">
+            <div v-if="isSummaryCategoryOpen(group.category)" class="summary-group-panel">
+              <div class="summary-herb-list">
+                <div v-for="herb in group.herbs" :key="herb.id" class="summary-herb-row">
+                  <span class="summary-herb-name">{{ herb.nameCn }}</span>
+                  <span class="summary-herb-stock" :class="{ low: getDisplayStock(herb) <= 3 }">
+                    {{ getDisplayStock(herb) }} 瓶
+                  </span>
+                </div>
+              </div>
+            </div>
+          </transition>
+        </div>
+      </div>
+
+      <div v-else class="summary-empty">No herb summary available.</div>
+    </section>
+
     <section v-if="loading" class="empty-card">
       <p>Loading herbs...</p>
     </section>
@@ -323,6 +369,7 @@ const searchKeyword = ref('')
 const selectedCategory = ref('all')
 
 const herbs = ref([])
+const openSummaryCategories = ref([])
 
 const loading = ref(true)
 const savingId = ref('')
@@ -442,6 +489,59 @@ const groupedHerbs = computed(() => {
 const filteredAlphabeticalHerbs = computed(() => {
   return [...filteredHerbs.value].sort((a, b) => a.nameCn.localeCompare(b.nameCn, 'zh-Hans-CN'))
 })
+
+function getDisplayStock(herb) {
+  const stock = Number(herb?.editStock ?? herb?.stock ?? 0)
+  return Number.isNaN(stock) ? 0 : Math.max(0, stock)
+}
+
+const summarySourceHerbs = computed(() => {
+  return herbs.value.filter((h) => h.nameCn && h.nameCn !== '添加药材')
+})
+
+const summaryGroups = computed(() => {
+  const map = new Map()
+
+  summarySourceHerbs.value
+    .slice()
+    .sort((a, b) => {
+      if (Number(a.groupOrder || 0) !== Number(b.groupOrder || 0)) {
+        return Number(a.groupOrder || 0) - Number(b.groupOrder || 0)
+      }
+      return Number(a.defaultOrder || 0) - Number(b.defaultOrder || 0)
+    })
+    .forEach((h) => {
+      if (!map.has(h.category)) {
+        map.set(h.category, {
+          category: h.category,
+          groupOrder: Number(h.groupOrder || 0),
+          herbs: [],
+        })
+      }
+
+      map.get(h.category).herbs.push(h)
+    })
+
+  return [...map.values()].sort((a, b) => a.groupOrder - b.groupOrder)
+})
+
+const summaryHerbCount = computed(() => summarySourceHerbs.value.length)
+
+function toggleSummaryCategory(categoryName) {
+  const exists = openSummaryCategories.value.includes(categoryName)
+
+  if (exists) {
+    openSummaryCategories.value = openSummaryCategories.value.filter(
+      (item) => item !== categoryName,
+    )
+  } else {
+    openSummaryCategories.value = [...openSummaryCategories.value, categoryName]
+  }
+}
+
+function isSummaryCategoryOpen(categoryName) {
+  return openSummaryCategories.value.includes(categoryName)
+}
 
 function increaseStock(h) {
   h.editStock++
@@ -831,7 +931,8 @@ async function handleExcelImport(event) {
 .page-header-card,
 .toolbar-card,
 .group-card,
-.empty-card {
+.empty-card,
+.summary-card {
   background: #ffffff;
   border-radius: 24px;
   padding: 22px;
@@ -966,6 +1067,167 @@ async function handleExcelImport(event) {
 .modal-input:focus {
   border-color: #1c5b47;
   box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
+}
+
+/* 新增总览区 */
+.summary-card {
+  padding: 22px;
+}
+
+.summary-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.summary-top h3 {
+  margin: 0;
+  font-size: 22px;
+  color: #173c2f;
+}
+
+.summary-top p {
+  margin: 8px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.summary-total {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef5f1;
+  color: #184c3b;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.summary-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.summary-group-item {
+  border: 1px solid #e7eeea;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fbfcfb 0%, #f7faf8 100%);
+  overflow: hidden;
+}
+
+.summary-group-trigger {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.summary-group-trigger:hover {
+  background: rgba(24, 76, 59, 0.02);
+}
+
+.summary-group-left,
+.summary-group-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.summary-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  font-size: 14px;
+  color: #184c3b;
+  transition: transform 0.2s ease;
+}
+
+.summary-chevron.open {
+  transform: rotate(180deg);
+}
+
+.summary-group-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: #173c2f;
+}
+
+.summary-group-count {
+  font-size: 12px;
+  font-weight: 800;
+  color: #6b7280;
+  background: #ffffff;
+  border: 1px solid #e5ebe7;
+  border-radius: 999px;
+  padding: 6px 10px;
+}
+
+.summary-group-panel {
+  padding: 0 18px 18px;
+}
+
+.summary-herb-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.summary-herb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #edf2ef;
+}
+
+.summary-herb-name {
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.summary-herb-stock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: #edf8f1;
+  color: #24995b;
+}
+
+.summary-herb-stock.low {
+  background: #fff1f2;
+  color: #dc2626;
+}
+
+.summary-empty {
+  color: #6b7280;
+  font-weight: 700;
+  text-align: center;
+  padding: 12px 0 4px;
 }
 
 .group-list {
@@ -1228,6 +1490,17 @@ async function handleExcelImport(event) {
   transform: translateY(-8px);
 }
 
+.expand-fade-enter-active,
+.expand-fade-leave-active {
+  transition: all 0.22s ease;
+}
+
+.expand-fade-enter-from,
+.expand-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1380,11 +1653,16 @@ async function handleExcelImport(event) {
   .alpha-row {
     grid-template-columns: 140px minmax(0, 1fr) 1fr 150px;
   }
+
+  .summary-herb-list {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 900px) {
   .page-header-card,
-  .toolbar-card {
+  .toolbar-card,
+  .summary-top {
     display: flex;
     flex-direction: column;
   }
@@ -1430,6 +1708,10 @@ async function handleExcelImport(event) {
 
   .modal-card {
     padding: 28px 20px;
+  }
+
+  .summary-herb-list {
+    grid-template-columns: 1fr;
   }
 }
 </style>
