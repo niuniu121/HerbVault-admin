@@ -3,9 +3,6 @@
     <section class="page-card settings-header-card">
       <div>
         <h2>Settings</h2>
-        <p class="page-desc">
-          Control Telegram low-stock alerts by category or by individual herb.
-        </p>
       </div>
 
       <div class="header-right">

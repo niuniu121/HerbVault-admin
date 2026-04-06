@@ -5,7 +5,8 @@ const corsHeaders = {
   'Content-Type': 'application/json',
 }
 
-const FIRESTORE_BASE_URL = 'https://firestore.googleapis.com/v1/projects'
+const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore'
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 
 export async function onRequest(context) {
   const { request } = context
@@ -66,7 +67,6 @@ async function handlePost(context) {
     }
 
     const telegramMessage = buildTelegramMessage(lowStockItems, threshold)
-
     const telegramResult = await sendTelegramMessage(env, telegramMessage)
 
     return json({
@@ -91,13 +91,23 @@ async function handlePost(context) {
 
 async function fetchHerbs(env) {
   const projectId = String(env.FIREBASE_PROJECT_ID || '').trim()
-  const accessToken = String(env.FIREBASE_ACCESS_TOKEN || '').trim()
+  const clientEmail = String(env.FIREBASE_CLIENT_EMAIL || '').trim()
+  const privateKey = String(env.FIREBASE_PRIVATE_KEY || '')
+    .replace(/\\n/g, '\n')
+    .trim()
 
-  if (!projectId || !accessToken) {
-    throw new Error('Missing FIREBASE_PROJECT_ID or FIREBASE_ACCESS_TOKEN')
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error(
+      'Missing FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, or FIREBASE_PRIVATE_KEY'
+    )
   }
 
-  const url = `${FIRESTORE_BASE_URL}/${projectId}/databases/(default)/documents/herbs`
+  const accessToken = await getAccessToken({
+    clientEmail,
+    privateKey,
+  })
+
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/herbs`
 
   const response = await fetch(url, {
     method: 'GET',
@@ -134,7 +144,6 @@ async function fetchHerbs(env) {
 
 function getField(fields, key, fallback = '') {
   const field = fields[key]
-
   if (!field) return fallback
 
   if ('stringValue' in field) return field.stringValue
@@ -194,6 +203,97 @@ async function sendTelegramMessage(env, message) {
   }
 
   return data
+}
+
+async function getAccessToken({ clientEmail, privateKey }) {
+  const now = Math.floor(Date.now() / 1000)
+
+  const header = {
+    alg: 'RS256',
+    typ: 'JWT',
+  }
+
+  const payload = {
+    iss: clientEmail,
+    scope: FIRESTORE_SCOPE,
+    aud: GOOGLE_TOKEN_URL,
+    exp: now + 3600,
+    iat: now,
+  }
+
+  const unsignedJwt = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(
+    JSON.stringify(payload)
+  )}`
+
+  const signature = await signJwt(unsignedJwt, privateKey)
+  const jwt = `${unsignedJwt}.${signature}`
+
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion: jwt,
+  })
+
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(data?.error_description || data?.error || 'Failed to get Google access token')
+  }
+
+  return data.access_token
+}
+
+async function signJwt(unsignedJwt, privateKeyPem) {
+  const pem = privateKeyPem
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\s+/g, '')
+
+  const binary = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0))
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    binary.buffer,
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      hash: 'SHA-256',
+    },
+    false,
+    ['sign']
+  )
+
+  const signatureBuffer = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    new TextEncoder().encode(unsignedJwt)
+  )
+
+  return arrayBufferToBase64Url(signatureBuffer)
+}
+
+function base64UrlEncode(str) {
+  return btoa(unescape(encodeURIComponent(str)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+}
+
+function arrayBufferToBase64Url(buffer) {
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  const len = bytes.byteLength
+
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
 function json(data, status = 200) {

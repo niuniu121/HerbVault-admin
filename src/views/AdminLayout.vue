@@ -39,15 +39,6 @@
           <span>Settings</span>
         </RouterLink>
       </nav>
-
-      <div class="sidebar-footer">
-        <div class="footer-card">
-          <p class="footer-title">HerbVault Admin</p>
-          <p class="footer-text">
-            Manage inventory, stock updates and usage history in one clean place.
-          </p>
-        </div>
-      </div>
     </aside>
 
     <main class="main-area">
