@@ -33,6 +33,11 @@
           <span class="nav-icon">↺</span>
           <span>History</span>
         </RouterLink>
+
+        <RouterLink to="/settings" class="nav-link" @click="handleNavClick">
+          <span class="nav-icon">⚙</span>
+          <span>Settings</span>
+        </RouterLink>
       </nav>
 
       <div class="sidebar-footer">

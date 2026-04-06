@@ -57,7 +57,6 @@
       </select>
     </section>
 
-    <!-- 新增：库存总览折叠区 -->
     <section v-if="!loading" class="summary-card">
       <div class="summary-top">
         <div>
@@ -249,7 +248,6 @@
       </div>
     </transition>
 
-    <!-- 删除确认 -->
     <div v-if="showDeleteModal" class="modal-overlay" @click.self="closeDeleteModal">
       <div class="modal-card">
         <div class="modal-icon warning">!</div>
@@ -273,7 +271,6 @@
       </div>
     </div>
 
-    <!-- Add Category -->
     <div v-if="showAddCategoryModal" class="modal-overlay" @click.self="closeAddCategoryModal">
       <div class="modal-card form-modal">
         <div class="modal-icon success">+</div>
@@ -293,7 +290,6 @@
       </div>
     </div>
 
-    <!-- Add Herb -->
     <div v-if="showAddHerbModal" class="modal-overlay" @click.self="closeAddHerbModal">
       <div class="modal-card form-modal larger-modal">
         <div class="modal-icon success">+</div>
@@ -401,11 +397,11 @@ const newHerb = ref({
 const IS_LOCAL_DEV =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 
-// 本地开发时走线上已部署好的 Cloudflare function；
-// 线上部署时走同域 /api/send-telegram-alert
 const ALERT_API_URL = IS_LOCAL_DEV
   ? 'https://herbvault-admin.pages.dev/api/send-telegram-alert'
   : '/api/send-telegram-alert'
+
+const TELEGRAM_ALERT_SECRET = import.meta.env.VITE_TELEGRAM_ALERT_SECRET || ''
 
 function getOperator() {
   return {
@@ -431,6 +427,8 @@ async function loadPageData() {
       ...d.data(),
       editStock: Number(d.data().stock || 0),
       lowStockAlertSent: d.data().lowStockAlertSent === true,
+      telegramNotifyEnabled: d.data().telegramNotifyEnabled !== false,
+      categoryNotifyEnabled: d.data().categoryNotifyEnabled !== false,
     }))
   } catch (e) {
     console.error('loadPageData error:', e)
@@ -551,7 +549,11 @@ function decreaseStock(h) {
 }
 
 async function sendLowStockTelegramAlert(herbName, currentStock) {
-  const message = ` Low Stock Alert
+  if (!TELEGRAM_ALERT_SECRET) {
+    throw new Error('Missing VITE_TELEGRAM_ALERT_SECRET')
+  }
+
+  const message = `🔥 Low Stock Alert
 
 Herb: ${herbName}
 Current Stock: ${currentStock}
@@ -563,6 +565,7 @@ Please restock soon.`
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-telegram-secret': TELEGRAM_ALERT_SECRET,
     },
     body: JSON.stringify({ message }),
   })
@@ -579,6 +582,21 @@ Please restock soon.`
 async function syncLowStockAlertStatus(herb, finalStock) {
   try {
     const alreadySent = herb.lowStockAlertSent === true
+
+    const categoryNotifyEnabled = herb.categoryNotifyEnabled !== false
+    const herbNotifyEnabled = herb.telegramNotifyEnabled !== false
+    const allowTelegram = categoryNotifyEnabled && herbNotifyEnabled
+
+    if (!allowTelegram) {
+      if (alreadySent) {
+        await updateDoc(doc(db, HERBS, herb.id), {
+          lowStockAlertSent: false,
+          lowStockThreshold: LOW_STOCK_THRESHOLD,
+        })
+        herb.lowStockAlertSent = false
+      }
+      return
+    }
 
     if (finalStock <= LOW_STOCK_THRESHOLD && !alreadySent) {
       await sendLowStockTelegramAlert(herb.nameCn, finalStock)
@@ -642,8 +660,7 @@ async function saveStock(herb) {
 
     showToast('Saved')
 
-    // 不阻塞主保存
-    syncLowStockAlertStatus(herb, finalStock)
+    await syncLowStockAlertStatus(herb, finalStock)
   } catch (e) {
     console.error('saveStock error:', e)
     showToast('Save failed', 'error')
@@ -721,6 +738,8 @@ async function confirmAddCategory() {
       unit: '瓶',
       lowStockThreshold: LOW_STOCK_THRESHOLD,
       lowStockAlertSent: false,
+      telegramNotifyEnabled: true,
+      categoryNotifyEnabled: true,
       isActive: true,
       createdAt: serverTimestamp(),
     })
@@ -786,6 +805,8 @@ async function confirmAddHerb() {
       unit: '瓶',
       lowStockThreshold: LOW_STOCK_THRESHOLD,
       lowStockAlertSent: false,
+      telegramNotifyEnabled: true,
+      categoryNotifyEnabled: true,
       isActive: true,
       createdAt: serverTimestamp(),
     })
@@ -818,6 +839,8 @@ async function handleImportSeeds() {
         unit: '瓶',
         lowStockThreshold: LOW_STOCK_THRESHOLD,
         lowStockAlertSent: false,
+        telegramNotifyEnabled: true,
+        categoryNotifyEnabled: true,
         createdAt: serverTimestamp(),
       })
     }
@@ -877,6 +900,8 @@ async function handleExcelImport(event) {
       const updatePayload = {
         stock: nextStock,
         lowStockThreshold: LOW_STOCK_THRESHOLD,
+        telegramNotifyEnabled: herbData.telegramNotifyEnabled !== false,
+        categoryNotifyEnabled: herbData.categoryNotifyEnabled !== false,
         updatedAt: serverTimestamp(),
       }
 
@@ -1068,7 +1093,6 @@ async function handleExcelImport(event) {
   box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
 }
 
-/* 新增总览区 */
 .summary-card {
   padding: 22px;
 }

@@ -1,291 +1,79 @@
-async function getAccessToken(env) {
-  const now = Math.floor(Date.now() / 1000)
-
-  const header = {
-    alg: 'RS256',
-    typ: 'JWT',
-  }
-
-  const claimSet = {
-    iss: env.FIREBASE_CLIENT_EMAIL,
-    scope: 'https://www.googleapis.com/auth/datastore',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now,
-  }
-
-  const encoder = new TextEncoder()
-
-  const base64UrlEncode = (obj) =>
-    btoa(JSON.stringify(obj))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/g, '')
-
-  const unsignedToken = `${base64UrlEncode(header)}.${base64UrlEncode(claimSet)}`
-
-  const privateKeyPem = String(env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n')
-
-  const privateKey = await crypto.subtle.importKey(
-    'pkcs8',
-    pemToArrayBuffer(privateKeyPem),
-    {
-      name: 'RSASSA-PKCS1-v1_5',
-      hash: 'SHA-256',
-    },
-    false,
-    ['sign']
-  )
-
-  const signature = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    privateKey,
-    encoder.encode(unsignedToken)
-  )
-
-  const jwt = `${unsignedToken}.${arrayBufferToBase64Url(signature)}`
-
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt,
-    }),
-  })
-
-  const tokenData = await tokenRes.json()
-
-  if (!tokenRes.ok || !tokenData.access_token) {
-    throw new Error(tokenData.error_description || tokenData.error || 'Failed to get access token')
-  }
-
-  return tokenData.access_token
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, x-cron-secret',
+  'Content-Type': 'application/json',
 }
 
-function pemToArrayBuffer(pem) {
-  const base64 = pem
-    .replace('-----BEGIN PRIVATE KEY-----', '')
-    .replace('-----END PRIVATE KEY-----', '')
-    .replace(/\s/g, '')
-
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-
-  return bytes.buffer
-}
-
-function arrayBufferToBase64Url(buffer) {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function getMelbourneDateInfo(date = new Date()) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Australia/Melbourne',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-
-  const parts = formatter.formatToParts(date)
-  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]))
-  const dateKey = `${map.year}-${map.month}-${map.day}`
-
-  return { dateKey }
-}
-
-function parseFirestoreValue(fieldValue) {
-  if (!fieldValue || typeof fieldValue !== 'object') return null
-
-  if ('stringValue' in fieldValue) return fieldValue.stringValue
-  if ('integerValue' in fieldValue) return Number(fieldValue.integerValue)
-  if ('doubleValue' in fieldValue) return Number(fieldValue.doubleValue)
-  if ('booleanValue' in fieldValue) return fieldValue.booleanValue
-  if ('nullValue' in fieldValue) return null
-
-  return null
-}
-
-function getField(fields, key, fallback = null) {
-  return key in fields ? parseFirestoreValue(fields[key]) : fallback
-}
-
-function buildTelegramMessage(items, dateKey, threshold) {
-  const MAX_ITEMS = 50
-  const visibleItems = items.slice(0, MAX_ITEMS)
-  const hiddenCount = Math.max(items.length - MAX_ITEMS, 0)
-
-  const lines = visibleItems.map((item, index) => {
-    return `${index + 1}. ${item.name}｜${item.stock} bottles｜${item.category}`
-  })
-
-  return [
-    '📦 HerbVault Daily Low Stock Check',
-    `📅 Date: ${dateKey}`,
-    `⚠️ Threshold: <= ${threshold} bottles`,
-    `📊 Total low stock items: ${items.length}`,
-    '',
-    'Top items needing restock:',
-    '',
-    ...lines,
-    hiddenCount > 0 ? '' : null,
-    hiddenCount > 0 ? `...and ${hiddenCount} more items.` : null,
-    '',
-    'Please restock soon.',
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-async function fetchHerbs(env) {
-  const accessToken = await getAccessToken(env)
-
-  const projectId = env.FIREBASE_PROJECT_ID
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/herbs?pageSize=1000`
-
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  })
-
-  const data = await res.json()
-
-  if (!res.ok) {
-    throw new Error(data?.error?.message || 'Failed to fetch herbs from Firestore')
-  }
-
-  const documents = data.documents || []
-
-  return documents.map((doc) => {
-    const fields = doc.fields || {}
-
-    return {
-      id: doc.name?.split('/').pop() || '',
-      name:
-        getField(fields, 'nameCn') ||
-        getField(fields, 'name') ||
-        getField(fields, 'title') ||
-        'Unnamed Herb',
-      category: getField(fields, 'category') || 'Uncategorized',
-      stock: Number(getField(fields, 'stock', 0) || 0),
-    }
-  })
-}
-
-async function sendTelegramMessage(env, message) {
-  const sendRes = await fetch('https://herbvault-admin.pages.dev/api/send-telegram-alert', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-telegram-secret': env.TELEGRAM_ALERT_SECRET,
-    },
-    body: JSON.stringify({ message }),
-  })
-
-  const sendData = await sendRes.json().catch(() => ({}))
-
-  if (!sendRes.ok || !sendData.success) {
-    throw new Error(sendData?.message || 'Failed to send Telegram alert')
-  }
-
-  return sendData
-}
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  })
-}
+const FIRESTORE_BASE_URL = 'https://firestore.googleapis.com/v1/projects'
 
 export async function onRequest(context) {
-  const { request, env } = context
+  const { request } = context
 
-  if (request.method !== 'POST') {
-    return json({ success: false, message: 'Method not allowed' }, 405)
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders,
+    })
   }
 
+  if (request.method !== 'POST') {
+    return json(
+      {
+        success: false,
+        message: 'Method not allowed',
+      },
+      405
+    )
+  }
+
+  return handlePost(context)
+}
+
+async function handlePost(context) {
   try {
-    const cronSecret = request.headers.get('x-cron-secret') || ''
+    const { request, env } = context
+
+    const incomingSecret = request.headers.get('x-cron-secret') || ''
     const expectedSecret = String(env.CRON_CALL_SECRET || '').trim()
 
-    if (!expectedSecret || cronSecret !== expectedSecret) {
-      return json({ success: false, message: 'Unauthorized' }, 401)
+    if (!expectedSecret || incomingSecret !== expectedSecret) {
+      return json(
+        {
+          success: false,
+          message: 'Unauthorized',
+        },
+        401
+      )
     }
 
-    const { dateKey } = getMelbourneDateInfo(new Date())
-    const kvKey = `low-stock-daily:${dateKey}`
-
-    const alreadySent = await env.HERBVAULT_JOBS.get(kvKey)
-    if (alreadySent) {
-      return json({
-        success: true,
-        skipped: true,
-        message: `Already sent for ${dateKey}`,
-      })
-    }
-
-    const threshold = Number(env.LOW_STOCK_THRESHOLD || 3)
     const herbs = await fetchHerbs(env)
+    const threshold = Number(env.LOW_STOCK_THRESHOLD || 3)
 
     const lowStockItems = herbs
+      .filter((item) => item.name !== '添加药材')
+      .filter((item) => item.categoryNotifyEnabled !== false)
+      .filter((item) => item.telegramNotifyEnabled !== false)
       .filter((item) => Number(item.stock) <= threshold)
       .sort((a, b) => a.stock - b.stock || a.name.localeCompare(b.name, 'zh-Hans-CN'))
 
-    if (lowStockItems.length === 0) {
-      await env.HERBVAULT_JOBS.put(
-        kvKey,
-        JSON.stringify({
-          sent: false,
-          reason: 'no_low_stock_items',
-          checkedAt: new Date().toISOString(),
-        }),
-        { expirationTtl: 60 * 60 * 24 * 7 }
-      )
-
+    if (!lowStockItems.length) {
       return json({
         success: true,
-        skipped: true,
-        message: 'No low stock items today',
+        message: 'No low stock items found',
+        count: 0,
       })
     }
 
-    const telegramMessage = buildTelegramMessage(lowStockItems, dateKey, threshold)
-    const telegramResult = await sendTelegramMessage(env, telegramMessage)
+    const telegramMessage = buildTelegramMessage(lowStockItems, threshold)
 
-    await env.HERBVAULT_JOBS.put(
-      kvKey,
-      JSON.stringify({
-        sent: true,
-        itemCount: lowStockItems.length,
-        dateKey,
-        checkedAt: new Date().toISOString(),
-      }),
-      { expirationTtl: 60 * 60 * 24 * 7 }
-    )
+    const telegramResult = await sendTelegramMessage(env, telegramMessage)
 
     return json({
       success: true,
-      sent: true,
-      dateKey,
-      itemCount: lowStockItems.length,
-      items: lowStockItems,
+      message: 'Daily low stock check completed',
+      count: lowStockItems.length,
+      lowStockItems,
       telegramResult,
     })
   } catch (error) {
@@ -300,4 +88,117 @@ export async function onRequest(context) {
     )
   }
 }
-//rebuild
+
+async function fetchHerbs(env) {
+  const projectId = String(env.FIREBASE_PROJECT_ID || '').trim()
+  const accessToken = String(env.FIREBASE_ACCESS_TOKEN || '').trim()
+
+  if (!projectId || !accessToken) {
+    throw new Error('Missing FIREBASE_PROJECT_ID or FIREBASE_ACCESS_TOKEN')
+  }
+
+  const url = `${FIRESTORE_BASE_URL}/${projectId}/databases/(default)/documents/herbs`
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data?.error?.message || 'Failed to fetch herbs from Firestore')
+  }
+
+  const documents = Array.isArray(data.documents) ? data.documents : []
+
+  return documents.map((doc) => {
+    const fields = doc.fields || {}
+
+    return {
+      id: doc.name?.split('/').pop() || '',
+      name:
+        getField(fields, 'nameCn') ||
+        getField(fields, 'name') ||
+        getField(fields, 'title') ||
+        'Unnamed Herb',
+      category: getField(fields, 'category') || 'Uncategorized',
+      stock: Number(getField(fields, 'stock', 0) || 0),
+      telegramNotifyEnabled: getField(fields, 'telegramNotifyEnabled', true) !== false,
+      categoryNotifyEnabled: getField(fields, 'categoryNotifyEnabled', true) !== false,
+    }
+  })
+}
+
+function getField(fields, key, fallback = '') {
+  const field = fields[key]
+
+  if (!field) return fallback
+
+  if ('stringValue' in field) return field.stringValue
+  if ('integerValue' in field) return Number(field.integerValue)
+  if ('doubleValue' in field) return Number(field.doubleValue)
+  if ('booleanValue' in field) return field.booleanValue
+
+  return fallback
+}
+
+function buildTelegramMessage(items, threshold) {
+  const lines = [
+    `Daily Low Stock Check`,
+    ``,
+    `Threshold: ≤ ${threshold}`,
+    `Count: ${items.length}`,
+    ``,
+  ]
+
+  items.forEach((item, index) => {
+    lines.push(
+      `${index + 1}. ${item.name}`,
+      `   Category: ${item.category}`,
+      `   Stock: ${item.stock}`,
+      ``
+    )
+  })
+
+  lines.push('Please restock soon.')
+
+  return lines.join('\n')
+}
+
+async function sendTelegramMessage(env, message) {
+  const token = String(env.TELEGRAM_ALERT_BOT_TOKEN || '').trim()
+  const chatId = String(env.TELEGRAM_ALERT_CHAT_ID || '').trim()
+
+  if (!token || !chatId) {
+    throw new Error('Missing TELEGRAM_ALERT_BOT_TOKEN or TELEGRAM_ALERT_CHAT_ID')
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+    }),
+  })
+
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data?.description || 'Telegram send failed')
+  }
+
+  return data
+}
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: corsHeaders,
+  })
+}
