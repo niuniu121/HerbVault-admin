@@ -43,9 +43,6 @@
                 <h3>{{ group.category }}</h3>
                 <span class="group-count">{{ group.herbs.length }} herbs</span>
               </div>
-              <p class="group-desc">
-                Turn off this category to stop Telegram alerts for all herbs inside it.
-              </p>
             </div>
           </button>
 
