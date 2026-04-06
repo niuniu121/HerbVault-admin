@@ -49,7 +49,7 @@ async function handlePost(context) {
     }
 
     const herbs = await fetchHerbs(env)
-    const threshold = Number(env.LOW_STOCK_THRESHOLD || 3)
+    const threshold = Number(env.LOW_STOCK_THRESHOLD || 2)
 
     const lowStockItems = herbs
       .filter((item) => item.name !== '添加药材')

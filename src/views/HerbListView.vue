@@ -6,10 +6,6 @@
       </div>
 
       <div class="header-actions">
-        <!-- <button class="ghost-btn" :disabled="loading || importingExcel" @click="handleImportSeeds">
-          Import Default List
-        </button> -->
-
         <label class="ghost-btn file-btn" :class="{ disabled: importingExcel }">
           {{ importingExcel ? 'Importing Excel...' : 'Import New Stock Excel' }}
           <input
@@ -88,7 +84,7 @@
               <div class="summary-herb-list">
                 <div v-for="herb in group.herbs" :key="herb.id" class="summary-herb-row">
                   <span class="summary-herb-name">{{ herb.nameCn }}</span>
-                  <span class="summary-herb-stock" :class="{ low: getDisplayStock(herb) <= 3 }">
+                  <span class="summary-herb-stock" :class="{ low: getDisplayStock(herb) <= 2 }">
                     {{ getDisplayStock(herb) }} 瓶
                   </span>
                 </div>
@@ -107,71 +103,133 @@
 
     <template v-else>
       <section v-if="sortMode === 'default'" class="group-list">
-        <div v-for="group in groupedHerbs" :key="group.category" class="group-card">
-          <div class="group-header">
-            <h3>{{ group.category }}</h3>
-            <span>{{ group.herbs.length }} herbs</span>
+        <div
+          v-for="group in groupedHerbs"
+          :key="group.category"
+          class="group-card"
+          :class="{
+            'drag-over-group': dragOverCategory === group.category && canDragStructure,
+            'dragging-group': draggingCategory === group.category && canDragStructure,
+          }"
+        >
+          <div class="group-header-wrap">
+            <button class="group-header-main" @click="toggleGroupCategory(group.category)">
+              <div class="group-header-main-left">
+                <span class="group-chevron" :class="{ open: isGroupCategoryOpen(group.category) }">
+                  ▾
+                </span>
+                <h3>{{ group.category }}</h3>
+                <button class="category-edit-btn" @click.stop="openEditCategoryModal(group)">
+                  Edit
+                </button>
+              </div>
+
+              <span class="group-count">{{ group.herbs.length }} herbs</span>
+            </button>
+
+            <button
+              class="group-drag-btn"
+              :class="{ disabled: !canDragStructure }"
+              :draggable="canDragStructure"
+              title="Drag category"
+              @dragstart="handleCategoryDragStart(group)"
+              @dragover.prevent="handleCategoryDragOver(group)"
+              @drop="handleCategoryDrop(group)"
+              @dragend="handleCategoryDragEnd"
+              @click.stop
+            >
+              ⋮⋮
+            </button>
           </div>
 
-          <div class="table-head default-head">
-            <div class="col-order">顺序</div>
-            <div class="col-name">药材名称</div>
-            <div class="col-stock">库存管理</div>
-            <div class="col-actions">操作</div>
-          </div>
-
-          <div class="herb-list">
-            <div v-for="herb in group.herbs" :key="herb.id" class="herb-row default-row">
-              <div class="col-order">
-                <span class="order-badge">{{ herb.defaultOrder }}</span>
+          <transition name="expand-fade">
+            <div v-if="isGroupCategoryOpen(group.category)" class="group-body">
+              <div class="table-head default-head">
+                <div class="col-order">顺序</div>
+                <div class="col-name">药材名称</div>
+                <div class="col-stock">库存管理</div>
+                <div class="col-actions">操作</div>
               </div>
 
-              <div class="col-name">
-                <div class="name-main">{{ herb.nameCn }}</div>
-              </div>
+              <div class="herb-list">
+                <div
+                  v-for="herb in group.herbs"
+                  :key="herb.id"
+                  class="herb-row default-row"
+                  :class="{
+                    'drag-over-herb':
+                      dragOverHerbId === herb.id &&
+                      draggingHerbCategory === group.category &&
+                      canDragStructure,
+                    'dragging-herb': draggingHerbId === herb.id && canDragStructure,
+                  }"
+                  :draggable="canDragStructure"
+                  @dragstart="handleHerbDragStart(herb, group)"
+                  @dragover.prevent="handleHerbDragOver(herb, group)"
+                  @drop="handleHerbDrop(herb, group)"
+                  @dragend="handleHerbDragEnd"
+                >
+                  <div class="col-order">
+                    <div class="order-drag-wrap">
+                      <span
+                        class="drag-handle herb-drag-handle"
+                        :class="{ disabled: !canDragStructure }"
+                        title="Drag herb"
+                      >
+                        ⋮⋮
+                      </span>
+                      <span class="order-badge">{{ herb.defaultOrder }}</span>
+                    </div>
+                  </div>
 
-              <div class="col-stock">
-                <div class="stock-editor">
-                  <button class="stock-step-btn minus" @click="decreaseStock(herb)">−</button>
+                  <div class="col-name">
+                    <div class="name-main">{{ herb.nameCn }}</div>
+                  </div>
 
-                  <input
-                    v-model.number="herb.editStock"
-                    class="stock-input"
-                    type="number"
-                    min="0"
-                  />
+                  <div class="col-stock">
+                    <div class="stock-editor">
+                      <button class="stock-step-btn minus" @click="decreaseStock(herb)">−</button>
 
-                  <button class="stock-step-btn plus" @click="increaseStock(herb)">+</button>
+                      <input
+                        v-model.number="herb.editStock"
+                        class="stock-input"
+                        type="number"
+                        min="0"
+                      />
 
-                  <span
-                    class="stock-status"
-                    :class="{ low: herb.editStock <= 3, normal: herb.editStock > 3 }"
-                  >
-                    {{ herb.editStock }} 瓶
-                  </span>
-                </div>
-              </div>
+                      <button class="stock-step-btn plus" @click="increaseStock(herb)">+</button>
 
-              <div class="col-actions">
-                <div class="action-group">
-                  <button
-                    class="save-btn"
-                    :disabled="savingId === herb.id"
-                    @click="saveStock(herb)"
-                  >
-                    {{ savingId === herb.id ? 'Saving...' : 'Save' }}
-                  </button>
-                  <button
-                    class="delete-btn"
-                    :disabled="deletingId === herb.id"
-                    @click="openDeleteModal(herb)"
-                  >
-                    Delete
-                  </button>
+                      <span
+                        class="stock-status"
+                        :class="{ low: herb.editStock <= 2, normal: herb.editStock > 2 }"
+                      >
+                        {{ herb.editStock }} 瓶
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="col-actions">
+                    <div class="action-group">
+                      <button
+                        class="save-btn"
+                        :disabled="savingId === herb.id"
+                        @click="saveStock(herb)"
+                      >
+                        {{ savingId === herb.id ? 'Saving...' : 'Save' }}
+                      </button>
+                      <button
+                        class="delete-btn"
+                        :disabled="deletingId === herb.id"
+                        @click="openDeleteModal(herb)"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </transition>
         </div>
 
         <section v-if="groupedHerbs.length === 0" class="empty-card">
@@ -212,7 +270,7 @@
 
                 <span
                   class="stock-status"
-                  :class="{ low: herb.editStock <= 3, normal: herb.editStock > 3 }"
+                  :class="{ low: herb.editStock <= 2, normal: herb.editStock > 2 }"
                 >
                   {{ herb.editStock }} 瓶
                 </span>
@@ -278,13 +336,37 @@
 
         <div class="form-area single-form-area">
           <label>Category Name</label>
-          <input v-model.trim="newCategoryName" class="modal-input" type="text" placeholder="" />
+          <input v-model.trim="newCategoryName" class="modal-input" type="text" />
         </div>
 
         <div class="modal-actions">
           <button class="modal-cancel-btn" @click="closeAddCategoryModal">Cancel</button>
           <button class="modal-save-btn" :disabled="addingCategory" @click="confirmAddCategory">
             {{ addingCategory ? 'Saving...' : 'Save' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showEditCategoryModal" class="modal-overlay" @click.self="closeEditCategoryModal">
+      <div class="modal-card form-modal">
+        <div class="modal-icon success">✎</div>
+        <h3>Edit Category</h3>
+
+        <div class="form-area single-form-area">
+          <label>Category Name</label>
+          <input
+            v-model.trim="editCategoryName"
+            class="modal-input"
+            type="text"
+            placeholder="Enter new category name"
+          />
+        </div>
+
+        <div class="modal-actions">
+          <button class="modal-cancel-btn" @click="closeEditCategoryModal">Cancel</button>
+          <button class="modal-save-btn" :disabled="editingCategory" @click="confirmEditCategory">
+            {{ editingCategory ? 'Saving...' : 'Save' }}
           </button>
         </div>
       </div>
@@ -357,7 +439,7 @@ import { herbSeeds } from '../data/herbSeeds.js'
 
 const HERBS = 'herbs'
 const LOGS = 'stock_logs'
-const LOW_STOCK_THRESHOLD = 3
+const LOW_STOCK_THRESHOLD = 2
 
 const sortMode = ref('default')
 const searchKeyword = ref('')
@@ -365,12 +447,14 @@ const selectedCategory = ref('all')
 
 const herbs = ref([])
 const openSummaryCategories = ref([])
+const openGroupCategories = ref([])
 
 const loading = ref(true)
 const savingId = ref('')
 const deletingId = ref('')
 const addingCategory = ref(false)
 const addingHerb = ref(false)
+const editingCategory = ref(false)
 const importingExcel = ref(false)
 const excelInputRef = ref(null)
 
@@ -386,6 +470,10 @@ const herbToDelete = ref(null)
 const showAddCategoryModal = ref(false)
 const newCategoryName = ref('')
 
+const showEditCategoryModal = ref(false)
+const editingCategoryOldName = ref('')
+const editCategoryName = ref('')
+
 const showAddHerbModal = ref(false)
 const newHerb = ref({
   nameCn: '',
@@ -393,6 +481,13 @@ const newHerb = ref({
   stock: 0,
   unit: '瓶',
 })
+
+const draggingCategory = ref('')
+const dragOverCategory = ref('')
+
+const draggingHerbId = ref('')
+const draggingHerbCategory = ref('')
+const dragOverHerbId = ref('')
 
 const IS_LOCAL_DEV =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
@@ -430,6 +525,9 @@ async function loadPageData() {
       telegramNotifyEnabled: d.data().telegramNotifyEnabled !== false,
       categoryNotifyEnabled: d.data().categoryNotifyEnabled !== false,
     }))
+
+    const allCategories = [...new Set(snap.docs.map((d) => d.data().category).filter(Boolean))]
+    openGroupCategories.value = [...allCategories]
   } catch (e) {
     console.error('loadPageData error:', e)
     showToast(e.message || 'Load failed', 'error')
@@ -466,25 +564,33 @@ const groupedHerbs = computed(() => {
   filteredHerbs.value
     .slice()
     .sort((a, b) => {
-      if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder
-      return a.defaultOrder - b.defaultOrder
+      if (Number(a.groupOrder || 0) !== Number(b.groupOrder || 0)) {
+        return Number(a.groupOrder || 0) - Number(b.groupOrder || 0)
+      }
+      return Number(a.defaultOrder || 0) - Number(b.defaultOrder || 0)
     })
     .forEach((h) => {
       if (!map.has(h.category)) {
         map.set(h.category, {
           category: h.category,
-          groupOrder: h.groupOrder,
+          groupOrder: Number(h.groupOrder || 0),
           herbs: [],
         })
       }
       map.get(h.category).herbs.push(h)
     })
 
-  return [...map.values()].sort((a, b) => a.groupOrder - b.groupOrder)
+  return [...map.values()].sort((a, b) => Number(a.groupOrder || 0) - Number(b.groupOrder || 0))
 })
 
 const filteredAlphabeticalHerbs = computed(() => {
   return [...filteredHerbs.value].sort((a, b) => a.nameCn.localeCompare(b.nameCn, 'zh-Hans-CN'))
+})
+
+const canDragStructure = computed(() => {
+  return (
+    sortMode.value === 'default' && !searchKeyword.value.trim() && selectedCategory.value === 'all'
+  )
 })
 
 function getDisplayStock(herb) {
@@ -540,12 +646,158 @@ function isSummaryCategoryOpen(categoryName) {
   return openSummaryCategories.value.includes(categoryName)
 }
 
+function toggleGroupCategory(categoryName) {
+  const exists = openGroupCategories.value.includes(categoryName)
+
+  if (exists) {
+    openGroupCategories.value = openGroupCategories.value.filter((item) => item !== categoryName)
+  } else {
+    openGroupCategories.value = [...openGroupCategories.value, categoryName]
+  }
+}
+
+function isGroupCategoryOpen(categoryName) {
+  return openGroupCategories.value.includes(categoryName)
+}
+
 function increaseStock(h) {
   h.editStock++
 }
 
 function decreaseStock(h) {
   h.editStock = Math.max(0, h.editStock - 1)
+}
+
+function moveArrayItem(list, fromIndex, toIndex) {
+  const next = [...list]
+  const [moved] = next.splice(fromIndex, 1)
+  next.splice(toIndex, 0, moved)
+  return next
+}
+
+async function persistCategoryOrder(orderedGroups) {
+  const updates = []
+
+  orderedGroups.forEach((group, index) => {
+    const nextGroupOrder = index + 1
+    herbs.value
+      .filter((h) => h.category === group.category)
+      .forEach((herb) => {
+        herb.groupOrder = nextGroupOrder
+        updates.push(
+          updateDoc(doc(db, HERBS, herb.id), {
+            groupOrder: nextGroupOrder,
+            updatedAt: serverTimestamp(),
+          }),
+        )
+      })
+  })
+
+  await Promise.all(updates)
+}
+
+async function persistHerbOrder(categoryName, orderedHerbs) {
+  const updates = []
+
+  orderedHerbs.forEach((herb, index) => {
+    const nextDefaultOrder = index + 1
+    const target = herbs.value.find((item) => item.id === herb.id)
+    if (target) {
+      target.defaultOrder = nextDefaultOrder
+    }
+
+    updates.push(
+      updateDoc(doc(db, HERBS, herb.id), {
+        defaultOrder: nextDefaultOrder,
+        updatedAt: serverTimestamp(),
+      }),
+    )
+  })
+
+  await Promise.all(updates)
+}
+
+function handleCategoryDragStart(group) {
+  if (!canDragStructure.value) return
+  draggingCategory.value = group.category
+}
+
+function handleCategoryDragOver(group) {
+  if (!canDragStructure.value || !draggingCategory.value) return
+  if (draggingCategory.value === group.category) return
+  dragOverCategory.value = group.category
+}
+
+async function handleCategoryDrop(targetGroup) {
+  if (!canDragStructure.value || !draggingCategory.value) return
+  if (draggingCategory.value === targetGroup.category) return
+
+  try {
+    const currentGroups = [...groupedHerbs.value]
+    const fromIndex = currentGroups.findIndex((g) => g.category === draggingCategory.value)
+    const toIndex = currentGroups.findIndex((g) => g.category === targetGroup.category)
+
+    if (fromIndex === -1 || toIndex === -1) return
+
+    const reordered = moveArrayItem(currentGroups, fromIndex, toIndex)
+    await persistCategoryOrder(reordered)
+    showToast('Category order updated')
+  } catch (e) {
+    console.error('handleCategoryDrop error:', e)
+    showToast('Category reorder failed', 'error')
+  } finally {
+    handleCategoryDragEnd()
+  }
+}
+
+function handleCategoryDragEnd() {
+  draggingCategory.value = ''
+  dragOverCategory.value = ''
+}
+
+function handleHerbDragStart(herb, group) {
+  if (!canDragStructure.value) return
+  draggingHerbId.value = herb.id
+  draggingHerbCategory.value = group.category
+}
+
+function handleHerbDragOver(herb, group) {
+  if (!canDragStructure.value || !draggingHerbId.value) return
+  if (draggingHerbCategory.value !== group.category) return
+  if (draggingHerbId.value === herb.id) return
+  dragOverHerbId.value = herb.id
+}
+
+async function handleHerbDrop(targetHerb, group) {
+  if (!canDragStructure.value || !draggingHerbId.value) return
+  if (draggingHerbCategory.value !== group.category) return
+  if (draggingHerbId.value === targetHerb.id) return
+
+  try {
+    const currentGroup = groupedHerbs.value.find((item) => item.category === group.category)
+    if (!currentGroup) return
+
+    const currentHerbs = [...currentGroup.herbs]
+    const fromIndex = currentHerbs.findIndex((h) => h.id === draggingHerbId.value)
+    const toIndex = currentHerbs.findIndex((h) => h.id === targetHerb.id)
+
+    if (fromIndex === -1 || toIndex === -1) return
+
+    const reordered = moveArrayItem(currentHerbs, fromIndex, toIndex)
+    await persistHerbOrder(group.category, reordered)
+    showToast('Herb order updated')
+  } catch (e) {
+    console.error('handleHerbDrop error:', e)
+    showToast('Herb reorder failed', 'error')
+  } finally {
+    handleHerbDragEnd()
+  }
+}
+
+function handleHerbDragEnd() {
+  draggingHerbId.value = ''
+  draggingHerbCategory.value = ''
+  dragOverHerbId.value = ''
 }
 
 async function sendLowStockTelegramAlert(herbName, currentStock) {
@@ -744,6 +996,10 @@ async function confirmAddCategory() {
       createdAt: serverTimestamp(),
     })
 
+    if (!openGroupCategories.value.includes(name)) {
+      openGroupCategories.value.push(name)
+    }
+
     showToast('Category added')
     closeAddCategoryModal()
     await loadPageData()
@@ -752,6 +1008,74 @@ async function confirmAddCategory() {
     showToast('Add category failed', 'error')
   } finally {
     addingCategory.value = false
+  }
+}
+
+function openEditCategoryModal(group) {
+  editingCategoryOldName.value = group.category
+  editCategoryName.value = group.category
+  showEditCategoryModal.value = true
+}
+
+function closeEditCategoryModal() {
+  showEditCategoryModal.value = false
+  editingCategoryOldName.value = ''
+  editCategoryName.value = ''
+}
+
+async function confirmEditCategory() {
+  try {
+    const oldName = editingCategoryOldName.value
+    const newName = editCategoryName.value.trim()
+
+    if (!oldName) return
+
+    if (!newName) {
+      showToast('Please enter category name', 'error')
+      return
+    }
+
+    if (oldName !== newName && categories.value.some((item) => item.name === newName)) {
+      showToast('Category already exists', 'error')
+      return
+    }
+
+    editingCategory.value = true
+
+    const targetHerbs = herbs.value.filter((h) => h.category === oldName)
+
+    await Promise.all(
+      targetHerbs.map((herb) =>
+        updateDoc(doc(db, HERBS, herb.id), {
+          category: newName,
+          updatedAt: serverTimestamp(),
+        }),
+      ),
+    )
+
+    targetHerbs.forEach((herb) => {
+      herb.category = newName
+    })
+
+    if (selectedCategory.value === oldName) {
+      selectedCategory.value = newName
+    }
+
+    openSummaryCategories.value = openSummaryCategories.value.map((item) =>
+      item === oldName ? newName : item,
+    )
+
+    openGroupCategories.value = openGroupCategories.value.map((item) =>
+      item === oldName ? newName : item,
+    )
+
+    showToast('Category updated')
+    closeEditCategoryModal()
+  } catch (e) {
+    console.error('confirmEditCategory error:', e)
+    showToast('Edit category failed', 'error')
+  } finally {
+    editingCategory.value = false
   }
 }
 
@@ -810,6 +1134,10 @@ async function confirmAddHerb() {
       isActive: true,
       createdAt: serverTimestamp(),
     })
+
+    if (!openGroupCategories.value.includes(category)) {
+      openGroupCategories.value.push(category)
+    }
 
     showToast('Herb added')
     closeAddHerbModal()
@@ -977,27 +1305,11 @@ async function handleExcelImport(event) {
   gap: 16px;
 }
 
-.page-kicker {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: #799483;
-}
-
 .page-header-card h2 {
   margin: 0;
   font-size: 34px;
   font-weight: 800;
   color: #173c2f;
-}
-
-.page-desc {
-  margin: 10px 0 0;
-  color: #6b7280;
-  line-height: 1.6;
-  max-width: 620px;
 }
 
 .header-actions {
@@ -1109,13 +1421,6 @@ async function handleExcelImport(event) {
   margin: 0;
   font-size: 22px;
   color: #173c2f;
-}
-
-.summary-top p {
-  margin: 8px 0 0;
-  color: #6b7280;
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .summary-total {
@@ -1259,24 +1564,169 @@ async function handleExcelImport(event) {
   gap: 20px;
 }
 
-.group-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.group-header-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px;
   gap: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  margin-bottom: 14px;
 }
 
-.group-header h3 {
+.group-header-main {
+  width: 100%;
+  border: 1px solid #e7eeea;
+  background: linear-gradient(180deg, #fbfcfb 0%, #f7faf8 100%);
+  border-radius: 18px;
+  min-height: 58px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.group-header-main:hover {
+  background: rgba(24, 76, 59, 0.02);
+}
+
+.group-header-main-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-header-main h3 {
   margin: 0;
   font-size: 22px;
   color: #173c2f;
 }
 
-.group-header span {
+.group-count {
   font-size: 13px;
   color: #6b7280;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.group-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  font-size: 14px;
+  color: #184c3b;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.group-chevron.open {
+  transform: rotate(180deg);
+}
+
+.group-body {
+  padding-top: 2px;
+}
+
+.category-edit-btn {
+  border: 1px solid #d9e1db;
+  background: #fff;
+  color: #355447;
+  border-radius: 10px;
+  height: 34px;
+  padding: 0 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.2s ease;
+  flex-shrink: 0;
+}
+
+.category-edit-btn:hover {
+  transform: translateY(-1px);
+}
+
+.group-drag-btn {
+  width: 46px;
+  height: 46px;
+  border: 1px solid #d9e1db;
+  background: #ffffff;
+  color: #7f8c88;
+  border-radius: 16px;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: grab;
+  transition: 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.group-drag-btn:hover {
+  background: #f3f7f4;
+  color: #184c3b;
+  transform: translateY(-1px);
+}
+
+.group-drag-btn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7f8c88;
+  user-select: none;
+  cursor: grab;
+  border-radius: 10px;
+  transition: 0.2s ease;
+}
+
+.drag-handle:hover {
+  background: #f3f7f4;
+  color: #184c3b;
+}
+
+.drag-handle.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.herb-drag-handle {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  border: 1px solid #e7eeea;
+  background: #fff;
+}
+
+.order-drag-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drag-over-group {
+  border-color: #184c3b;
+  box-shadow:
+    0 0 0 2px rgba(24, 76, 59, 0.08),
+    0 14px 36px rgba(15, 23, 42, 0.05);
+}
+
+.dragging-group {
+  opacity: 0.85;
+}
+
+.drag-over-herb {
+  border-color: #184c3b;
+  background: linear-gradient(180deg, #f6fbf8 0%, #eef7f2 100%);
+}
+
+.dragging-herb {
+  opacity: 0.8;
 }
 
 .table-head {
@@ -1590,11 +2040,6 @@ async function handleExcelImport(event) {
   text-align: center;
 }
 
-.modal-note {
-  font-size: 13px;
-  color: #9ca3af;
-}
-
 .form-grid {
   margin-top: 24px;
   display: grid;
@@ -1735,6 +2180,23 @@ async function handleExcelImport(event) {
 
   .summary-herb-list {
     grid-template-columns: 1fr;
+  }
+
+  .group-header-wrap {
+    grid-template-columns: 1fr 42px;
+  }
+
+  .group-header-main h3 {
+    font-size: 18px;
+  }
+
+  .group-count {
+    font-size: 12px;
+  }
+
+  .group-drag-btn {
+    width: 42px;
+    height: 42px;
   }
 }
 </style>

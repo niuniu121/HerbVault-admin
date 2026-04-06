@@ -50,7 +50,7 @@ exports.checkLowStockDaily = onRequest(async (req, res) => {
 
     const herbsSnap = await db
       .collection('herbs')
-      .where('stock', '<=', 3)
+      .where('stock', '<=', 2)
       .get()
 
     const lowStockItems = herbsSnap.docs
@@ -88,7 +88,7 @@ exports.checkLowStockDaily = onRequest(async (req, res) => {
       '📦 HerbVault Daily Low Stock Check',
       `📅 Date: ${dateKey}`,
       '',
-      'The following herbs are at or below 3 bottles:',
+      'The following herbs are at or below 2 bottles:',
       '',
       ...lines,
       '',
