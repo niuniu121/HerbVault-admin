@@ -107,6 +107,7 @@
           v-for="group in groupedHerbs"
           :key="group.category"
           class="group-card"
+          :data-category-drop="group.category"
           :class="{
             'drag-over-group': dragOverCategory === group.category && canDragStructure,
             'dragging-group': draggingCategory === group.category && canDragStructure,
@@ -136,6 +137,9 @@
               @dragover.prevent="handleCategoryDragOver(group)"
               @drop="handleCategoryDrop(group)"
               @dragend="handleCategoryDragEnd"
+              @touchstart.stop.prevent="handleCategoryTouchStart($event, group)"
+              @touchmove.stop.prevent="handleCategoryTouchMove"
+              @touchend.stop.prevent="handleCategoryTouchEnd"
               @click.stop
             >
               ⋮⋮
@@ -156,6 +160,8 @@
                   v-for="herb in group.herbs"
                   :key="herb.id"
                   class="herb-row default-row"
+                  :data-herb-id="herb.id"
+                  :data-herb-category="group.category"
                   :class="{
                     'drag-over-herb':
                       dragOverHerbId === herb.id &&
@@ -175,6 +181,9 @@
                         class="drag-handle herb-drag-handle"
                         :class="{ disabled: !canDragStructure }"
                         title="Drag herb"
+                        @touchstart.stop.prevent="handleHerbTouchStart($event, herb, group)"
+                        @touchmove.stop.prevent="handleHerbTouchMove"
+                        @touchend.stop.prevent="handleHerbTouchEnd"
                       >
                         ⋮⋮
                       </span>
@@ -489,6 +498,10 @@ const draggingHerbId = ref('')
 const draggingHerbCategory = ref('')
 const dragOverHerbId = ref('')
 
+const touchDraggingType = ref('')
+const touchStartPoint = ref({ x: 0, y: 0 })
+const touchMoved = ref(false)
+
 const IS_LOCAL_DEV =
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 
@@ -717,6 +730,41 @@ async function persistHerbOrder(categoryName, orderedHerbs) {
   await Promise.all(updates)
 }
 
+async function reorderCategoryTo(targetCategory) {
+  if (!canDragStructure.value || !draggingCategory.value) return
+  if (!targetCategory || draggingCategory.value === targetCategory) return
+
+  const currentGroups = [...groupedHerbs.value]
+  const fromIndex = currentGroups.findIndex((g) => g.category === draggingCategory.value)
+  const toIndex = currentGroups.findIndex((g) => g.category === targetCategory)
+
+  if (fromIndex === -1 || toIndex === -1) return
+
+  const reordered = moveArrayItem(currentGroups, fromIndex, toIndex)
+  await persistCategoryOrder(reordered)
+  showToast('Category order updated')
+}
+
+async function reorderHerbTo(targetHerbId, targetCategory) {
+  if (!canDragStructure.value || !draggingHerbId.value) return
+  if (!targetHerbId || !targetCategory) return
+  if (draggingHerbCategory.value !== targetCategory) return
+  if (draggingHerbId.value === targetHerbId) return
+
+  const currentGroup = groupedHerbs.value.find((item) => item.category === targetCategory)
+  if (!currentGroup) return
+
+  const currentHerbs = [...currentGroup.herbs]
+  const fromIndex = currentHerbs.findIndex((h) => h.id === draggingHerbId.value)
+  const toIndex = currentHerbs.findIndex((h) => h.id === targetHerbId)
+
+  if (fromIndex === -1 || toIndex === -1) return
+
+  const reordered = moveArrayItem(currentHerbs, fromIndex, toIndex)
+  await persistHerbOrder(targetCategory, reordered)
+  showToast('Herb order updated')
+}
+
 function handleCategoryDragStart(group) {
   if (!canDragStructure.value) return
   draggingCategory.value = group.category
@@ -730,18 +778,9 @@ function handleCategoryDragOver(group) {
 
 async function handleCategoryDrop(targetGroup) {
   if (!canDragStructure.value || !draggingCategory.value) return
-  if (draggingCategory.value === targetGroup.category) return
 
   try {
-    const currentGroups = [...groupedHerbs.value]
-    const fromIndex = currentGroups.findIndex((g) => g.category === draggingCategory.value)
-    const toIndex = currentGroups.findIndex((g) => g.category === targetGroup.category)
-
-    if (fromIndex === -1 || toIndex === -1) return
-
-    const reordered = moveArrayItem(currentGroups, fromIndex, toIndex)
-    await persistCategoryOrder(reordered)
-    showToast('Category order updated')
+    await reorderCategoryTo(targetGroup.category)
   } catch (e) {
     console.error('handleCategoryDrop error:', e)
     showToast('Category reorder failed', 'error')
@@ -770,22 +809,9 @@ function handleHerbDragOver(herb, group) {
 
 async function handleHerbDrop(targetHerb, group) {
   if (!canDragStructure.value || !draggingHerbId.value) return
-  if (draggingHerbCategory.value !== group.category) return
-  if (draggingHerbId.value === targetHerb.id) return
 
   try {
-    const currentGroup = groupedHerbs.value.find((item) => item.category === group.category)
-    if (!currentGroup) return
-
-    const currentHerbs = [...currentGroup.herbs]
-    const fromIndex = currentHerbs.findIndex((h) => h.id === draggingHerbId.value)
-    const toIndex = currentHerbs.findIndex((h) => h.id === targetHerb.id)
-
-    if (fromIndex === -1 || toIndex === -1) return
-
-    const reordered = moveArrayItem(currentHerbs, fromIndex, toIndex)
-    await persistHerbOrder(group.category, reordered)
-    showToast('Herb order updated')
+    await reorderHerbTo(targetHerb.id, group.category)
   } catch (e) {
     console.error('handleHerbDrop error:', e)
     showToast('Herb reorder failed', 'error')
@@ -799,6 +825,144 @@ function handleHerbDragEnd() {
   draggingHerbCategory.value = ''
   dragOverHerbId.value = ''
 }
+
+/* -------------------- 手机端 touch 拖拽 -------------------- */
+function getTouchPoint(event) {
+  const touch = event.touches?.[0] || event.changedTouches?.[0]
+  if (!touch) return null
+  return { x: touch.clientX, y: touch.clientY }
+}
+
+function markTouchMoved(point) {
+  const dx = Math.abs(point.x - touchStartPoint.value.x)
+  const dy = Math.abs(point.y - touchStartPoint.value.y)
+  if (dx > 6 || dy > 6) {
+    touchMoved.value = true
+  }
+}
+
+function findCategoryTargetFromPoint(point) {
+  const el = document.elementFromPoint(point.x, point.y)
+  if (!el) return ''
+  const target = el.closest('[data-category-drop]')
+  return target?.getAttribute('data-category-drop') || ''
+}
+
+function findHerbTargetFromPoint(point) {
+  const el = document.elementFromPoint(point.x, point.y)
+  if (!el) return { herbId: '', category: '' }
+
+  const target = el.closest('[data-herb-id]')
+  return {
+    herbId: target?.getAttribute('data-herb-id') || '',
+    category: target?.getAttribute('data-herb-category') || '',
+  }
+}
+
+function handleCategoryTouchStart(event, group) {
+  if (!canDragStructure.value) return
+  const point = getTouchPoint(event)
+  if (!point) return
+
+  touchDraggingType.value = 'category'
+  touchStartPoint.value = point
+  touchMoved.value = false
+
+  draggingCategory.value = group.category
+  dragOverCategory.value = ''
+}
+
+function handleCategoryTouchMove(event) {
+  if (touchDraggingType.value !== 'category' || !draggingCategory.value) return
+  const point = getTouchPoint(event)
+  if (!point) return
+
+  markTouchMoved(point)
+
+  const targetCategory = findCategoryTargetFromPoint(point)
+  if (targetCategory && targetCategory !== draggingCategory.value) {
+    dragOverCategory.value = targetCategory
+  } else {
+    dragOverCategory.value = ''
+  }
+}
+
+async function handleCategoryTouchEnd(event) {
+  if (touchDraggingType.value !== 'category') return
+
+  try {
+    const point = getTouchPoint(event)
+    if (point && touchMoved.value) {
+      const targetCategory = findCategoryTargetFromPoint(point)
+      if (targetCategory) {
+        await reorderCategoryTo(targetCategory)
+      }
+    }
+  } catch (e) {
+    console.error('handleCategoryTouchEnd error:', e)
+    showToast('Category reorder failed', 'error')
+  } finally {
+    touchDraggingType.value = ''
+    touchMoved.value = false
+    handleCategoryDragEnd()
+  }
+}
+
+function handleHerbTouchStart(event, herb, group) {
+  if (!canDragStructure.value) return
+  const point = getTouchPoint(event)
+  if (!point) return
+
+  touchDraggingType.value = 'herb'
+  touchStartPoint.value = point
+  touchMoved.value = false
+
+  draggingHerbId.value = herb.id
+  draggingHerbCategory.value = group.category
+  dragOverHerbId.value = ''
+}
+
+function handleHerbTouchMove(event) {
+  if (touchDraggingType.value !== 'herb' || !draggingHerbId.value) return
+  const point = getTouchPoint(event)
+  if (!point) return
+
+  markTouchMoved(point)
+
+  const target = findHerbTargetFromPoint(point)
+  if (
+    target.herbId &&
+    target.category &&
+    target.category === draggingHerbCategory.value &&
+    target.herbId !== draggingHerbId.value
+  ) {
+    dragOverHerbId.value = target.herbId
+  } else {
+    dragOverHerbId.value = ''
+  }
+}
+
+async function handleHerbTouchEnd(event) {
+  if (touchDraggingType.value !== 'herb') return
+
+  try {
+    const point = getTouchPoint(event)
+    if (point && touchMoved.value) {
+      const target = findHerbTargetFromPoint(point)
+      if (target.herbId && target.category) {
+        await reorderHerbTo(target.herbId, target.category)
+      }
+    }
+  } catch (e) {
+    console.error('handleHerbTouchEnd error:', e)
+    showToast('Herb reorder failed', 'error')
+  } finally {
+    touchDraggingType.value = ''
+    touchMoved.value = false
+    handleHerbDragEnd()
+  }
+}
+/* -------------------- 手机端 touch 拖拽 end -------------------- */
 
 async function sendLowStockTelegramAlert(herbName, currentStock) {
   if (!TELEGRAM_ALERT_SECRET) {
@@ -1661,6 +1825,8 @@ async function handleExcelImport(event) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  touch-action: none;
+  user-select: none;
 }
 
 .group-drag-btn:hover {
@@ -1701,6 +1867,8 @@ async function handleExcelImport(event) {
   font-size: 14px;
   border: 1px solid #e7eeea;
   background: #fff;
+  touch-action: none;
+  user-select: none;
 }
 
 .order-drag-wrap {
