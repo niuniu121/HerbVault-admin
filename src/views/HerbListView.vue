@@ -17,6 +17,20 @@
           />
         </label>
 
+        <button
+          class="ghost-btn"
+          :disabled="exportingLowStock || lowStockExportRows.length === 0"
+          @click="exportLowStockList"
+        >
+          {{
+            exportingLowStock
+              ? 'Exporting...'
+              : lowStockExportRows.length
+                ? `Export Low Stock (${lowStockExportRows.length})`
+                : 'Export Low Stock'
+          }}
+        </button>
+
         <button class="ghost-btn" @click="openAddCategoryModal">Add Category</button>
         <button class="primary-btn" @click="openAddHerbModal">Add Herb</button>
 
@@ -465,6 +479,7 @@ const addingCategory = ref(false)
 const addingHerb = ref(false)
 const editingCategory = ref(false)
 const importingExcel = ref(false)
+const exportingLowStock = ref(false)
 const excelInputRef = ref(null)
 
 const toast = ref({
@@ -523,6 +538,10 @@ function showToast(message, type = 'success') {
   setTimeout(() => {
     toast.value.show = false
   }, 2200)
+}
+
+function isRealHerb(herb) {
+  return herb?.nameCn && herb.nameCn !== '添加药材'
 }
 
 async function loadPageData() {
@@ -612,7 +631,7 @@ function getDisplayStock(herb) {
 }
 
 const summarySourceHerbs = computed(() => {
-  return herbs.value.filter((h) => h.nameCn && h.nameCn !== '添加药材')
+  return herbs.value.filter((h) => isRealHerb(h))
 })
 
 const summaryGroups = computed(() => {
@@ -642,6 +661,24 @@ const summaryGroups = computed(() => {
 })
 
 const summaryHerbCount = computed(() => summarySourceHerbs.value.length)
+
+const lowStockExportRows = computed(() => {
+  return herbs.value
+    .filter((h) => isRealHerb(h) && getDisplayStock(h) <= LOW_STOCK_THRESHOLD)
+    .slice()
+    .sort((a, b) => {
+      if (Number(a.groupOrder || 0) !== Number(b.groupOrder || 0)) {
+        return Number(a.groupOrder || 0) - Number(b.groupOrder || 0)
+      }
+      return Number(a.defaultOrder || 0) - Number(b.defaultOrder || 0)
+    })
+    .map((h) => ({
+      分类: h.category || '',
+      药材名称: h.nameCn || '',
+      数量: getDisplayStock(h),
+      单位: h.unit || '瓶',
+    }))
+})
 
 function toggleSummaryCategory(categoryName) {
   const exists = openSummaryCategories.value.includes(categoryName)
@@ -1082,6 +1119,34 @@ async function saveStock(herb) {
     showToast('Save failed', 'error')
   } finally {
     savingId.value = ''
+  }
+}
+
+async function exportLowStockList() {
+  try {
+    if (!lowStockExportRows.value.length) {
+      showToast('No low stock herbs to export', 'error')
+      return
+    }
+
+    exportingLowStock.value = true
+
+    const worksheet = XLSX.utils.json_to_sheet(lowStockExportRows.value)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Low Stock')
+
+    const today = new Date()
+    const yyyy = today.getFullYear()
+    const mm = String(today.getMonth() + 1).padStart(2, '0')
+    const dd = String(today.getDate()).padStart(2, '0')
+
+    XLSX.writeFile(workbook, `low-stock-list-${yyyy}-${mm}-${dd}.xlsx`)
+    showToast('Low stock list exported')
+  } catch (e) {
+    console.error('exportLowStockList error:', e)
+    showToast('Export failed', 'error')
+  } finally {
+    exportingLowStock.value = false
   }
 }
 
