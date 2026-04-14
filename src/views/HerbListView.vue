@@ -62,7 +62,7 @@
       <select v-model="selectedCategory" class="category-select">
         <option value="all">All Categories</option>
         <option v-for="item in categories" :key="item.id" :value="item.name">
-          {{ item.name }}
+          {{ normalizeCategoryName(item.name) }}
         </option>
       </select>
     </section>
@@ -76,7 +76,11 @@
       </div>
 
       <div v-if="summaryGroups.length" class="summary-groups">
-        <div v-for="group in summaryGroups" :key="group.category" class="summary-group-item">
+        <div
+          v-for="(group, index) in summaryGroups"
+          :key="group.category"
+          class="summary-group-item"
+        >
           <button class="summary-group-trigger" @click="toggleSummaryCategory(group.category)">
             <div class="summary-group-left">
               <span
@@ -85,7 +89,9 @@
               >
                 ▾
               </span>
-              <span class="summary-group-name">{{ group.category }}</span>
+              <span class="summary-group-name">
+                {{ getCategoryDisplayName(index, group.category) }}
+              </span>
             </div>
 
             <div class="summary-group-right">
@@ -118,7 +124,7 @@
     <template v-else>
       <section v-if="sortMode === 'default'" class="group-list">
         <div
-          v-for="group in groupedHerbs"
+          v-for="(group, index) in groupedHerbs"
           :key="group.category"
           class="group-card"
           :data-category-drop="group.category"
@@ -133,7 +139,7 @@
                 <span class="group-chevron" :class="{ open: isGroupCategoryOpen(group.category) }">
                   ▾
                 </span>
-                <h3>{{ group.category }}</h3>
+                <h3>{{ getCategoryDisplayName(index, group.category) }}</h3>
                 <button class="category-edit-btn" @click.stop="openEditCategoryModal(group)">
                   Edit
                 </button>
@@ -276,7 +282,7 @@
         <div class="herb-list">
           <div v-for="herb in filteredAlphabeticalHerbs" :key="herb.id" class="herb-row alpha-row">
             <div class="col-category">
-              <span class="category-pill">{{ herb.category }}</span>
+              <span class="category-pill">{{ normalizeCategoryName(herb.category) }}</span>
             </div>
 
             <div class="col-name">
@@ -416,7 +422,7 @@
             <select v-model="newHerb.category" class="modal-input">
               <option value="">Select a category</option>
               <option v-for="item in categories" :key="item.id" :value="item.name">
-                {{ item.name }}
+                {{ normalizeCategoryName(item.name) }}
               </option>
             </select>
           </div>
@@ -542,6 +548,29 @@ function showToast(message, type = 'success') {
 
 function isRealHerb(herb) {
   return herb?.nameCn && herb.nameCn !== '添加药材'
+}
+
+function normalizeCategoryName(name) {
+  return String(name || '')
+    .replace(/^[A-Z]+\.\s*/, '')
+    .trim()
+}
+
+function getAlphabetLabel(index) {
+  let n = index + 1
+  let result = ''
+
+  while (n > 0) {
+    n--
+    result = String.fromCharCode(65 + (n % 26)) + result
+    n = Math.floor(n / 26)
+  }
+
+  return result
+}
+
+function getCategoryDisplayName(index, rawName) {
+  return `${getAlphabetLabel(index)}. ${normalizeCategoryName(rawName)}`
 }
 
 async function loadPageData() {
@@ -1191,14 +1220,14 @@ function closeAddCategoryModal() {
 
 async function confirmAddCategory() {
   try {
-    const name = newCategoryName.value.trim()
+    const name = normalizeCategoryName(newCategoryName.value)
 
     if (!name) {
       showToast('Please enter category name', 'error')
       return
     }
 
-    if (categories.value.some((item) => item.name === name)) {
+    if (categories.value.some((item) => normalizeCategoryName(item.name) === name)) {
       showToast('Category already exists', 'error')
       return
     }
@@ -1242,7 +1271,7 @@ async function confirmAddCategory() {
 
 function openEditCategoryModal(group) {
   editingCategoryOldName.value = group.category
-  editCategoryName.value = group.category
+  editCategoryName.value = normalizeCategoryName(group.category)
   showEditCategoryModal.value = true
 }
 
@@ -1255,7 +1284,7 @@ function closeEditCategoryModal() {
 async function confirmEditCategory() {
   try {
     const oldName = editingCategoryOldName.value
-    const newName = editCategoryName.value.trim()
+    const newName = normalizeCategoryName(editCategoryName.value)
 
     if (!oldName) return
 
@@ -1264,7 +1293,10 @@ async function confirmEditCategory() {
       return
     }
 
-    if (oldName !== newName && categories.value.some((item) => item.name === newName)) {
+    if (
+      normalizeCategoryName(oldName) !== newName &&
+      categories.value.some((item) => normalizeCategoryName(item.name) === newName)
+    ) {
       showToast('Category already exists', 'error')
       return
     }
