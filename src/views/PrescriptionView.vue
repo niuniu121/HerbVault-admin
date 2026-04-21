@@ -7,7 +7,7 @@
 
       <div class="header-actions">
         <button class="ghost-btn" @click="addRow">Add Row</button>
-        <button class="ghost-btn" @click="resetToDefaultRows">Reset 15 Rows</button>
+        <button class="ghost-btn" @click="confirmResetRows">Reset 15 Rows</button>
         <button class="ghost-btn" @click="clearAll">Clear</button>
         <button class="ghost-btn" :disabled="!canExportCurrent" @click="exportCurrentPrescription">
           Export Excel
@@ -763,6 +763,18 @@ function confirmRemoveRow(index) {
     action: () => {
       removeRow(index)
       showToast('Row removed')
+    },
+  })
+}
+
+function confirmResetRows() {
+  openDialog({
+    title: 'Reset all rows?',
+    message: 'This will reset the current input back to 15 default rows.',
+    confirmText: 'Reset',
+    type: 'neutral',
+    action: () => {
+      resetToDefaultRows()
     },
   })
 }
