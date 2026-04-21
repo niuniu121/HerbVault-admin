@@ -5,6 +5,7 @@ import DashboardView from '../views/DashboardView.vue'
 import HerbListView from '../views/HerbListView.vue'
 import StockHistoryView from '../views/StockHistoryView.vue'
 import SettingsView from '../views/SettingsView.vue'
+import PrescriptionView from '../views/PrescriptionView.vue'
 
 const routes = [
   {
@@ -40,6 +41,10 @@ const routes = [
         name: 'settings',
         component: SettingsView,
       },
+      {
+        path: '/prescriptions',
+        component: PrescriptionView,
+      }
     ],
   },
 ]

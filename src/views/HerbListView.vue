@@ -358,6 +358,21 @@
       </div>
     </div>
 
+    <div v-if="showReorderModal" class="modal-overlay" @click.self="closeReorderModal">
+      <div class="modal-card">
+        <div class="modal-icon success">↕</div>
+        <h3>{{ reorderModalTitle }}</h3>
+        <p>{{ reorderModalMessage }}</p>
+
+        <div class="modal-actions">
+          <button class="modal-cancel-btn" @click="closeReorderModal">Cancel</button>
+          <button class="modal-save-btn" :disabled="reordering" @click="confirmReorder">
+            {{ reordering ? 'Saving...' : 'Confirm' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showAddCategoryModal" class="modal-overlay" @click.self="closeAddCategoryModal">
       <div class="modal-card form-modal">
         <div class="modal-icon success">+</div>
@@ -496,6 +511,13 @@ const toast = ref({
 
 const showDeleteModal = ref(false)
 const herbToDelete = ref(null)
+
+const showReorderModal = ref(false)
+const reorderModalTitle = ref('')
+const reorderModalMessage = ref('')
+const pendingReorderAction = ref(null)
+const pendingReorderPayload = ref(null)
+const reordering = ref(false)
 
 const showAddCategoryModal = ref(false)
 const newCategoryName = ref('')
@@ -754,6 +776,40 @@ function moveArrayItem(list, fromIndex, toIndex) {
   return next
 }
 
+function openReorderModal({ title, message, action, payload = null }) {
+  reorderModalTitle.value = title
+  reorderModalMessage.value = message
+  pendingReorderAction.value = action
+  pendingReorderPayload.value = payload
+  showReorderModal.value = true
+}
+
+function closeReorderModal() {
+  showReorderModal.value = false
+  reorderModalTitle.value = ''
+  reorderModalMessage.value = ''
+  pendingReorderAction.value = null
+  pendingReorderPayload.value = null
+  reordering.value = false
+}
+
+async function confirmReorder() {
+  if (typeof pendingReorderAction.value !== 'function') {
+    closeReorderModal()
+    return
+  }
+
+  try {
+    reordering.value = true
+    await pendingReorderAction.value(pendingReorderPayload.value)
+  } catch (e) {
+    console.error('confirmReorder error:', e)
+    showToast('Reorder failed', 'error')
+  } finally {
+    closeReorderModal()
+  }
+}
+
 async function persistCategoryOrder(orderedGroups) {
   const updates = []
 
@@ -796,13 +852,14 @@ async function persistHerbOrder(categoryName, orderedHerbs) {
   await Promise.all(updates)
 }
 
-async function reorderCategoryTo(targetCategory) {
-  if (!canDragStructure.value || !draggingCategory.value) return
-  if (!targetCategory || draggingCategory.value === targetCategory) return
+async function reorderCategoryByPayload(payload) {
+  if (!canDragStructure.value) return
+  if (!payload?.fromCategory || !payload?.targetCategory) return
+  if (payload.fromCategory === payload.targetCategory) return
 
   const currentGroups = [...groupedHerbs.value]
-  const fromIndex = currentGroups.findIndex((g) => g.category === draggingCategory.value)
-  const toIndex = currentGroups.findIndex((g) => g.category === targetCategory)
+  const fromIndex = currentGroups.findIndex((g) => g.category === payload.fromCategory)
+  const toIndex = currentGroups.findIndex((g) => g.category === payload.targetCategory)
 
   if (fromIndex === -1 || toIndex === -1) return
 
@@ -811,24 +868,96 @@ async function reorderCategoryTo(targetCategory) {
   showToast('Category order updated')
 }
 
-async function reorderHerbTo(targetHerbId, targetCategory) {
-  if (!canDragStructure.value || !draggingHerbId.value) return
-  if (!targetHerbId || !targetCategory) return
-  if (draggingHerbCategory.value !== targetCategory) return
-  if (draggingHerbId.value === targetHerbId) return
+async function reorderHerbByPayload(payload) {
+  if (!canDragStructure.value) return
+  if (!payload?.fromHerbId || !payload?.targetHerbId || !payload?.targetCategory) return
+  if (payload.fromHerbId === payload.targetHerbId) return
+  if (payload.fromCategory !== payload.targetCategory) return
 
-  const currentGroup = groupedHerbs.value.find((item) => item.category === targetCategory)
+  const currentGroup = groupedHerbs.value.find((item) => item.category === payload.targetCategory)
   if (!currentGroup) return
 
   const currentHerbs = [...currentGroup.herbs]
-  const fromIndex = currentHerbs.findIndex((h) => h.id === draggingHerbId.value)
-  const toIndex = currentHerbs.findIndex((h) => h.id === targetHerbId)
+  const fromIndex = currentHerbs.findIndex((h) => h.id === payload.fromHerbId)
+  const toIndex = currentHerbs.findIndex((h) => h.id === payload.targetHerbId)
 
   if (fromIndex === -1 || toIndex === -1) return
 
   const reordered = moveArrayItem(currentHerbs, fromIndex, toIndex)
-  await persistHerbOrder(targetCategory, reordered)
+  await persistHerbOrder(payload.targetCategory, reordered)
   showToast('Herb order updated')
+}
+
+function requestCategoryReorder(targetCategory) {
+  if (!canDragStructure.value || !draggingCategory.value) {
+    handleCategoryDragEnd()
+    return
+  }
+
+  if (!targetCategory || draggingCategory.value === targetCategory) {
+    handleCategoryDragEnd()
+    return
+  }
+
+  const payload = {
+    fromCategory: draggingCategory.value,
+    targetCategory,
+  }
+
+  const fromGroup = groupedHerbs.value.find((g) => g.category === payload.fromCategory)
+  const toGroup = groupedHerbs.value.find((g) => g.category === payload.targetCategory)
+
+  const fromName = fromGroup ? normalizeCategoryName(fromGroup.category) : payload.fromCategory
+  const toName = toGroup ? normalizeCategoryName(toGroup.category) : payload.targetCategory
+
+  openReorderModal({
+    title: 'Confirm category reorder',
+    message: `Move "${fromName}" to the new position near "${toName}"?`,
+    payload,
+    action: async (savedPayload) => {
+      await reorderCategoryByPayload(savedPayload)
+    },
+  })
+
+  handleCategoryDragEnd()
+}
+
+function requestHerbReorder(targetHerbId, targetCategory) {
+  if (!canDragStructure.value || !draggingHerbId.value) {
+    handleHerbDragEnd()
+    return
+  }
+
+  if (!targetHerbId || !targetCategory) {
+    handleHerbDragEnd()
+    return
+  }
+
+  if (draggingHerbCategory.value !== targetCategory || draggingHerbId.value === targetHerbId) {
+    handleHerbDragEnd()
+    return
+  }
+
+  const payload = {
+    fromHerbId: draggingHerbId.value,
+    fromCategory: draggingHerbCategory.value,
+    targetHerbId,
+    targetCategory,
+  }
+
+  const sourceHerb = herbs.value.find((h) => h.id === payload.fromHerbId)
+  const targetHerb = herbs.value.find((h) => h.id === payload.targetHerbId)
+
+  openReorderModal({
+    title: 'Confirm herb reorder',
+    message: `Move "${sourceHerb?.nameCn || 'this herb'}" to the new position near "${targetHerb?.nameCn || 'this herb'}"?`,
+    payload,
+    action: async (savedPayload) => {
+      await reorderHerbByPayload(savedPayload)
+    },
+  })
+
+  handleHerbDragEnd()
 }
 
 function handleCategoryDragStart(group) {
@@ -844,15 +973,7 @@ function handleCategoryDragOver(group) {
 
 async function handleCategoryDrop(targetGroup) {
   if (!canDragStructure.value || !draggingCategory.value) return
-
-  try {
-    await reorderCategoryTo(targetGroup.category)
-  } catch (e) {
-    console.error('handleCategoryDrop error:', e)
-    showToast('Category reorder failed', 'error')
-  } finally {
-    handleCategoryDragEnd()
-  }
+  requestCategoryReorder(targetGroup.category)
 }
 
 function handleCategoryDragEnd() {
@@ -875,15 +996,7 @@ function handleHerbDragOver(herb, group) {
 
 async function handleHerbDrop(targetHerb, group) {
   if (!canDragStructure.value || !draggingHerbId.value) return
-
-  try {
-    await reorderHerbTo(targetHerb.id, group.category)
-  } catch (e) {
-    console.error('handleHerbDrop error:', e)
-    showToast('Herb reorder failed', 'error')
-  } finally {
-    handleHerbDragEnd()
-  }
+  requestHerbReorder(targetHerb.id, group.category)
 }
 
 function handleHerbDragEnd() {
@@ -961,7 +1074,8 @@ async function handleCategoryTouchEnd(event) {
     if (point && touchMoved.value) {
       const targetCategory = findCategoryTargetFromPoint(point)
       if (targetCategory) {
-        await reorderCategoryTo(targetCategory)
+        requestCategoryReorder(targetCategory)
+        return
       }
     }
   } catch (e) {
@@ -970,7 +1084,9 @@ async function handleCategoryTouchEnd(event) {
   } finally {
     touchDraggingType.value = ''
     touchMoved.value = false
-    handleCategoryDragEnd()
+    if (draggingCategory.value) {
+      handleCategoryDragEnd()
+    }
   }
 }
 
@@ -1016,7 +1132,8 @@ async function handleHerbTouchEnd(event) {
     if (point && touchMoved.value) {
       const target = findHerbTargetFromPoint(point)
       if (target.herbId && target.category) {
-        await reorderHerbTo(target.herbId, target.category)
+        requestHerbReorder(target.herbId, target.category)
+        return
       }
     }
   } catch (e) {
@@ -1025,7 +1142,9 @@ async function handleHerbTouchEnd(event) {
   } finally {
     touchDraggingType.value = ''
     touchMoved.value = false
-    handleHerbDragEnd()
+    if (draggingHerbId.value) {
+      handleHerbDragEnd()
+    }
   }
 }
 /* -------------------- 手机端 touch 拖拽 end -------------------- */

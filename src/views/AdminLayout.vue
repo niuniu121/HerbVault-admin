@@ -34,6 +34,11 @@
           <span>History</span>
         </RouterLink>
 
+        <RouterLink to="/prescriptions" class="nav-link" @click="handleNavClick">
+          <span class="nav-icon">✎</span>
+          <span>Prescriptions</span>
+        </RouterLink>
+
         <RouterLink to="/settings" class="nav-link" @click="handleNavClick">
           <span class="nav-icon">⚙</span>
           <span>Settings</span>
