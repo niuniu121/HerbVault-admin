@@ -27,10 +27,22 @@
     </section>
 
     <section class="top-form-card card">
-      <div class="top-form-grid">
+      <div class="top-form-grid top-form-grid-3">
         <div class="top-form-field">
           <label class="field-label">Prescription Name</label>
           <input v-model.trim="prescriptionTitle" class="row-input" type="text" placeholder="" />
+        </div>
+
+        <div class="top-form-field compact-target-field">
+          <label class="field-label">Target Total (g)</label>
+          <input
+            :value="targetTotalGrams"
+            class="row-input"
+            type="text"
+            inputmode="decimal"
+            placeholder=""
+            @input="handleTargetTotalInput"
+          />
         </div>
 
         <div class="top-form-field compact-field">
@@ -101,6 +113,7 @@
                   inputmode="decimal"
                   placeholder="10"
                   @input="handleGramsInput($event, row)"
+                  @blur="normalizeGramsOnBlur(row)"
                 />
               </div>
             </div>
@@ -155,6 +168,10 @@
             <span class="preview-title-label">Date</span>
             <strong>{{ previewNowText }}</strong>
           </div>
+          <div class="preview-title-line">
+            <span class="preview-title-label">Target Total</span>
+            <strong>{{ targetTotalNumber }}g</strong>
+          </div>
         </div>
 
         <div v-if="previewItems.length" class="preview-list">
@@ -196,8 +213,20 @@
             <strong>{{ unmatchedCount }}</strong>
           </div>
           <div class="summary-row">
-            <span>Default Dose</span>
-            <strong>10g</strong>
+            <span>Raw Input Sum</span>
+            <strong>{{ rawInputTotalGrams }}g</strong>
+          </div>
+          <div class="summary-row">
+            <span>Scaled Total</span>
+            <strong>{{ previewTotalGrams }}g</strong>
+          </div>
+          <div class="summary-row">
+            <span>Target Total</span>
+            <strong>{{ targetTotalNumber }}g</strong>
+          </div>
+          <div class="summary-row">
+            <span>Status</span>
+            <strong>{{ previewStatusText }}</strong>
           </div>
         </div>
       </div>
@@ -352,6 +381,14 @@ const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
 const DEFAULT_ROWS = 15
 const DEFAULT_GRAMS = '10'
+// Default target follows the Excel workbook default:
+//   GramsEachTime (10g) * TimesPerDay (2) * TotalDays (14) = 280g
+// Admins can freely overwrite or clear this value.
+const DEFAULT_TARGET_TOTAL = '84'
+// Concentration ratio from the workbook (column B of HerbList). Every herb in
+// the source spreadsheet uses 5, so we keep it as a single constant. If you
+// ever store per-herb ratios, swap this out for a lookup.
+const GRANULE_RATIO = 5
 
 const herbs = ref([])
 const prescriptions = ref([])
@@ -362,6 +399,7 @@ const editingId = ref('')
 const currentPage = ref(1)
 const searchKeyword = ref('')
 const searchField = ref('all')
+const targetTotalGrams = ref(DEFAULT_TARGET_TOTAL)
 
 const toast = ref({
   show: false,
@@ -454,7 +492,16 @@ function sanitizeGrams(value) {
   return clean || DEFAULT_GRAMS
 }
 
-function filterGramsInput(value) {
+function toNumber(value) {
+  const num = Number(String(value || '').trim())
+  return Number.isFinite(num) ? num : 0
+}
+
+function roundTo2(num) {
+  return Math.round(num * 100) / 100
+}
+
+function filterDecimalInput(value) {
   const raw = String(value || '')
   let cleaned = raw.replace(/[^\d.]/g, '')
   const parts = cleaned.split('.')
@@ -463,13 +510,85 @@ function filterGramsInput(value) {
     cleaned = `${parts[0]}.${parts.slice(1).join('')}`
   }
 
-  return cleaned || DEFAULT_GRAMS
+  return cleaned
+}
+
+function filterGramsInput(value) {
+  return filterDecimalInput(value)
 }
 
 function handleGramsInput(event, row) {
   const cleaned = filterGramsInput(event.target.value)
   row.grams = cleaned
   event.target.value = cleaned
+}
+
+function normalizeGramsOnBlur(row) {
+  row.grams = sanitizeGrams(row.grams)
+}
+
+// Admins can type any number — including clearing the field entirely — so we
+// simply mirror the cleaned input here. Fallbacks only apply at save time.
+function handleTargetTotalInput(event) {
+  const cleaned = filterDecimalInput(event.target.value)
+  targetTotalGrams.value = cleaned
+  event.target.value = cleaned
+}
+
+/**
+ * Excel formula replicated here:
+ *   J_i = C_i / E_i              (raw grams / granule ratio)
+ *   F_i = (J_i / ΣJ) * Target    (distribute target proportionally)
+ *
+ * Because every herb in the source HerbList uses ratio = 5, E_i cancels out
+ * and the scaling reduces to raw_i / Σraw * target. We still keep the ratio
+ * in the code path so it is easy to switch to per-herb ratios later.
+ *
+ * The last valid row absorbs the rounding remainder so the scaled numbers
+ * always add up exactly to `target`.
+ */
+function scaleRowsToTarget(rows, targetValue) {
+  const target = toNumber(targetValue)
+
+  if (target <= 0) {
+    return rows.map((row) => ({ ...row }))
+  }
+
+  const validRows = rows.filter((row) => row.name && toNumber(row.grams) > 0)
+
+  // Granule equivalents per day (J_i = C_i / ratio)
+  const granuleEquivalents = validRows.map((row) => toNumber(row.grams) / GRANULE_RATIO)
+  const dayTotal = granuleEquivalents.reduce((sum, val) => sum + val, 0)
+
+  if (!dayTotal || !validRows.length) {
+    return rows.map((row) => ({ ...row }))
+  }
+
+  let accumulated = 0
+
+  return rows.map((row) => {
+    if (!row.name || toNumber(row.grams) <= 0) {
+      return { ...row }
+    }
+
+    const validIndex = validRows.findIndex((item) => item.key === row.key)
+    const isLastValid = validIndex === validRows.length - 1
+    const j = granuleEquivalents[validIndex]
+
+    let scaled
+
+    if (isLastValid) {
+      scaled = roundTo2(target - accumulated)
+    } else {
+      scaled = roundTo2((j / dayTotal) * target)
+      accumulated += scaled
+    }
+
+    return {
+      ...row,
+      grams: String(scaled),
+    }
+  })
 }
 
 function getAlphabetLabel(index) {
@@ -577,10 +696,6 @@ watch(
             row.pinyin = generated
           }
         }
-      }
-
-      if (!String(row.grams || '').trim()) {
-        row.grams = DEFAULT_GRAMS
       }
     })
   },
@@ -706,25 +821,52 @@ function markPinyinAsManual(row) {
   row.pinyinEdited = true
 }
 
+// Preview is the final prescription the user would hand out. When a target
+// total is set we automatically apply the Excel formula; otherwise we simply
+// show the raw input values.
 const previewItems = computed(() => {
-  return inputRows.value
-    .map((row) => {
-      const matched = getMatchedHerb(row.name)
-      if (!matched) return null
+  const namedMatchedRows = inputRows.value
+    .map((row) => ({ row, matched: getMatchedHerb(row.name) }))
+    .filter(({ row, matched }) => row.name && matched)
 
-      return {
-        herbId: matched.id,
-        herbName: matched.nameCn,
-        category: matched.category,
-        groupOrder: Number(matched.groupOrder || 0),
-        defaultOrder: Number(matched.defaultOrder || 0),
-        sequenceCode: matched.sequenceCode,
-        grams: sanitizeGrams(row.grams),
-        pinyin: getResolvedRowPinyin(row, matched),
-        matched: true,
-      }
-    })
-    .filter(Boolean)
+  if (!namedMatchedRows.length) return []
+
+  const target = toNumber(targetTotalGrams.value)
+  const rawTotal = namedMatchedRows.reduce(
+    (sum, { row }) => sum + toNumber(sanitizeGrams(row.grams)),
+    0,
+  )
+  const shouldScale = target > 0 && rawTotal > 0
+
+  let accumulated = 0
+
+  return namedMatchedRows.map(({ row, matched }, index) => {
+    const rawGrams = toNumber(sanitizeGrams(row.grams))
+    let displayGrams = sanitizeGrams(row.grams)
+
+    if (shouldScale) {
+      const j = rawGrams / GRANULE_RATIO
+      const dayTotal = rawTotal / GRANULE_RATIO
+      const isLast = index === namedMatchedRows.length - 1
+
+      const scaled = isLast ? roundTo2(target - accumulated) : roundTo2((j / dayTotal) * target)
+
+      if (!isLast) accumulated += scaled
+      displayGrams = String(scaled)
+    }
+
+    return {
+      herbId: matched.id,
+      herbName: matched.nameCn,
+      category: matched.category,
+      groupOrder: Number(matched.groupOrder || 0),
+      defaultOrder: Number(matched.defaultOrder || 0),
+      sequenceCode: matched.sequenceCode,
+      grams: displayGrams,
+      pinyin: getResolvedRowPinyin(row, matched),
+      matched: true,
+    }
+  })
 })
 
 const unmatchedCount = computed(() => {
@@ -741,6 +883,28 @@ const previewNowText = computed(() => {
 
 const canExportCurrent = computed(() => {
   return previewItems.value.length > 0
+})
+
+const rawInputTotalGrams = computed(() => {
+  return roundTo2(
+    inputRows.value
+      .filter((row) => row.name)
+      .reduce((sum, row) => sum + toNumber(sanitizeGrams(row.grams)), 0),
+  )
+})
+
+const previewTotalGrams = computed(() => {
+  return roundTo2(previewItems.value.reduce((sum, item) => sum + toNumber(item.grams), 0))
+})
+
+const targetTotalNumber = computed(() => {
+  return roundTo2(toNumber(targetTotalGrams.value))
+})
+
+const previewStatusText = computed(() => {
+  if (targetTotalNumber.value <= 0) return 'Set target to scale'
+  if (!previewItems.value.length) return 'Awaiting herbs'
+  return previewTotalGrams.value === targetTotalNumber.value ? 'Scaled' : 'Needs target'
 })
 
 function addRow() {
@@ -789,6 +953,7 @@ function clearAll() {
   notes.value = ''
   prescriptionTitle.value = ''
   editingId.value = ''
+  targetTotalGrams.value = DEFAULT_TARGET_TOTAL
 }
 
 function cancelEdit() {
@@ -811,8 +976,9 @@ function getOperator() {
 
 async function savePrescription() {
   try {
-    const rows = inputRows.value
+    const rawRows = inputRows.value
       .map((row) => ({
+        ...row,
         name: String(row.name || '').trim(),
         pinyin: normalizeAutoPinyin(row.pinyin),
         grams: sanitizeGrams(row.grams),
@@ -820,17 +986,42 @@ async function savePrescription() {
       }))
       .filter((row) => row.name)
 
-    if (!rows.length) {
+    if (!rawRows.length) {
       showToast('Please enter at least one herb', 'error')
       return
     }
 
-    if (rows.some((row) => !getMatchedHerb(row.name))) {
+    if (rawRows.some((row) => !getMatchedHerb(row.name))) {
       showToast('Please resolve unmatched herb names first', 'error')
       return
     }
 
+    if (rawRows.some((row) => toNumber(row.grams) <= 0)) {
+      showToast('Dose must be greater than 0', 'error')
+      return
+    }
+
+    const target = toNumber(targetTotalGrams.value)
+
+    if (target <= 0) {
+      showToast('Target total must be greater than 0', 'error')
+      return
+    }
+
+    // Apply the Excel formula at save time.
+    const rows = scaleRowsToTarget(rawRows, target)
+
     saving.value = true
+
+    // Reflect scaled values back into the form so what you see matches what
+    // gets persisted.
+    inputRows.value = scaleRowsToTarget(
+      inputRows.value.map((row) => ({
+        ...row,
+        grams: sanitizeGrams(row.grams),
+      })),
+      target,
+    )
 
     const items = rows.map((row) => {
       const matched = getMatchedHerb(row.name)
@@ -853,6 +1044,7 @@ async function savePrescription() {
     const payload = {
       title: prescriptionTitle.value || '',
       notes: notes.value || '',
+      targetTotal: String(target),
       items,
       createdBy: getOperator(),
       updatedAt: serverTimestamp(),
@@ -896,6 +1088,7 @@ function editPrescription(item) {
   prescriptionTitle.value = item.title || ''
   notes.value = item.notes || ''
   editingId.value = item.id
+  targetTotalGrams.value = item.targetTotal || DEFAULT_TARGET_TOTAL
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -1001,6 +1194,7 @@ function exportCurrentPrescription() {
     const payload = {
       title: previewDisplayTitle.value,
       notes: notes.value || '',
+      targetTotal: String(targetTotalNumber.value),
       items: previewItems.value.map((item) => ({
         ...item,
       })),
@@ -1162,8 +1356,11 @@ function goToNextPage() {
 
 .top-form-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
   gap: 14px;
+}
+
+.top-form-grid-3 {
+  grid-template-columns: minmax(0, 1fr) 150px 120px;
 }
 
 .top-form-field {
@@ -1174,6 +1371,10 @@ function goToNextPage() {
 
 .compact-field {
   max-width: 120px;
+}
+
+.compact-target-field {
+  max-width: 150px;
 }
 
 .row-count-box {
