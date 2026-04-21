@@ -163,7 +163,6 @@
       <div class="section-top history-top">
         <div>
           <h3>Recent Prescriptions</h3>
-          <span class="history-subtitle">Search by herb name, notes, or date/time</span>
         </div>
         <span class="section-badge">{{ filteredPrescriptions.length }}</span>
       </div>
