@@ -7,7 +7,11 @@
 
       <div class="header-actions">
         <button class="ghost-btn" @click="addRow">Add Row</button>
+        <button class="ghost-btn" @click="resetToDefaultRows">Reset 15 Rows</button>
         <button class="ghost-btn" @click="clearAll">Clear</button>
+        <button class="ghost-btn" :disabled="!canExportCurrent" @click="exportCurrentPrescription">
+          Export Excel
+        </button>
         <button class="primary-btn" :disabled="saving" @click="savePrescription">
           {{
             saving
@@ -22,11 +26,25 @@
       </div>
     </section>
 
+    <section class="top-form-card card">
+      <div class="top-form-grid">
+        <div class="top-form-field">
+          <label class="field-label">Prescription Name</label>
+          <input v-model.trim="prescriptionTitle" class="row-input" type="text" placeholder="" />
+        </div>
+
+        <div class="top-form-field compact-field">
+          <label class="field-label">Rows</label>
+          <div class="row-count-box">{{ inputRows.length }}</div>
+        </div>
+      </div>
+    </section>
+
     <section class="content-grid">
       <div class="left-panel card">
         <div class="section-top">
           <h3>Input</h3>
-          <span class="section-badge">{{ inputRows.length }} items</span>
+          <span class="section-badge">{{ inputRows.length }} rows</span>
         </div>
 
         <div v-if="editingId" class="editing-banner">
@@ -50,15 +68,27 @@
               </button>
             </div>
 
-            <div class="row-fields">
+            <div class="row-fields row-fields-3">
               <div class="name-field">
                 <label class="field-label">Herb Name</label>
                 <input
                   v-model.trim="row.name"
                   class="row-input"
                   type="text"
-                  placeholder="Type herb name..."
+                  placeholder=""
+                  @input="handleNameInput(row)"
                   @keydown.enter.prevent="handleEnter(index)"
+                />
+              </div>
+
+              <div class="pinyin-field">
+                <label class="field-label">Pinyin</label>
+                <input
+                  v-model.trim="row.pinyin"
+                  class="row-input"
+                  type="text"
+                  placeholder=""
+                  @input="markPinyinAsManual(row)"
                 />
               </div>
 
@@ -69,7 +99,7 @@
                   class="gram-input"
                   type="text"
                   inputmode="decimal"
-                  placeholder="Optional"
+                  placeholder="10"
                   @input="handleGramsInput($event, row)"
                 />
               </div>
@@ -81,13 +111,15 @@
                   {{ getMatchedHerb(row.name).sequenceCode }}
                 </span>
                 <span class="meta-text">
-                  {{ buildMetaDisplay(getMatchedHerb(row.name), row.grams) }}
+                  {{ buildMetaDisplay(getMatchedHerb(row.name), row) }}
                 </span>
               </template>
 
               <template v-else-if="row.name">
                 <span class="meta-pill error">Not Found</span>
-                <span class="meta-text">Please check herb name</span>
+                <span class="meta-text">
+                  {{ row.pinyin ? `Auto Pinyin: ${row.pinyin}` : 'Please check herb name' }}
+                </span>
               </template>
 
               <template v-else>
@@ -114,17 +146,29 @@
           <span class="section-badge">{{ previewItems.length }} matched</span>
         </div>
 
+        <div class="preview-headline">
+          <div class="preview-title-line">
+            <span class="preview-title-label">Name</span>
+            <strong>{{ previewDisplayTitle }}</strong>
+          </div>
+          <div class="preview-title-line">
+            <span class="preview-title-label">Date</span>
+            <strong>{{ previewNowText }}</strong>
+          </div>
+        </div>
+
         <div v-if="previewItems.length" class="preview-list">
           <div
             v-for="(item, index) in previewItems"
-            :key="`${item.herbId}-${index}`"
+            :key="`${item.herbId || item.herbName}-${index}`"
             class="preview-item"
           >
             <div class="preview-left">
               <span class="sequence-badge">{{ item.sequenceCode }}</span>
               <div class="preview-text">
-                <div class="preview-name">
-                  {{ formatHerbDisplay(item.herbName, item.grams) }}
+                <div class="preview-name">{{ item.herbName }} {{ item.grams }}g</div>
+                <div class="preview-pinyin" v-if="item.pinyin">
+                  {{ item.pinyin }}
                 </div>
                 <div class="preview-category">
                   {{ normalizeCategoryName(item.category) }}
@@ -152,8 +196,8 @@
             <strong>{{ unmatchedCount }}</strong>
           </div>
           <div class="summary-row">
-            <span>With Notes</span>
-            <strong>{{ notes ? 'Yes' : 'No' }}</strong>
+            <span>Default Dose</span>
+            <strong>10g</strong>
           </div>
         </div>
       </div>
@@ -164,7 +208,17 @@
         <div>
           <h3>Recent Prescriptions</h3>
         </div>
-        <span class="section-badge">{{ filteredPrescriptions.length }}</span>
+
+        <div class="history-top-right">
+          <button
+            class="ghost-btn small-btn"
+            :disabled="prescriptions.length === 0"
+            @click="exportAllPrescriptions"
+          >
+            Export All
+          </button>
+          <span class="section-badge">{{ filteredPrescriptions.length }}</span>
+        </div>
       </div>
 
       <div class="history-toolbar">
@@ -172,12 +226,13 @@
           v-model.trim="searchKeyword"
           class="search-input"
           type="text"
-          placeholder="Search by herb name, notes, or date..."
+          placeholder="Search by prescription name, herb, pinyin, notes, or date..."
         />
 
         <select v-model="searchField" class="filter-select">
           <option value="all">All</option>
-          <option value="herb">Herb Name</option>
+          <option value="title">Prescription Name</option>
+          <option value="herb">Herb / Pinyin</option>
           <option value="date">Date / Time</option>
           <option value="notes">Notes</option>
         </select>
@@ -187,11 +242,16 @@
         <div v-for="item in paginatedPrescriptions" :key="item.id" class="history-item">
           <div class="history-item-top">
             <div>
-              <div class="history-title">Prescription</div>
+              <div class="history-title">
+                {{ item.title || 'Untitled Prescription' }}
+              </div>
               <div class="history-time">{{ formatDate(item.createdAt) }}</div>
             </div>
 
             <div class="history-item-actions">
+              <button class="ghost-btn small-btn" @click="exportSavedPrescription(item)">
+                Export
+              </button>
               <button class="ghost-btn small-btn" @click="editPrescription(item)">Edit</button>
               <button class="danger-btn small-btn" @click="confirmDeletePrescription(item.id)">
                 Delete
@@ -205,8 +265,10 @@
               :key="`${item.id}-${idx}`"
               class="history-tag"
             >
-              {{ getLiveSequenceCode(herb) }}
-              {{ formatHerbDisplay(herb.herbName || herb.inputName, herb.grams) }}
+              {{ getLiveSequenceCode(herb) || herb.sequenceCode }}
+              {{ herb.herbName || herb.inputName }}
+              {{ herb.grams || '10' }}g
+              <template v-if="herb.pinyin"> · {{ herb.pinyin }}</template>
             </span>
           </div>
 
@@ -270,6 +332,8 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import * as XLSX from 'xlsx'
+import { pinyin as toPinyin } from 'pinyin-pro'
 import { auth, db } from '../services/firebase'
 import {
   addDoc,
@@ -286,11 +350,14 @@ import {
 const HERBS = 'herbs'
 const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
+const DEFAULT_ROWS = 15
+const DEFAULT_GRAMS = '10'
 
 const herbs = ref([])
 const prescriptions = ref([])
 const saving = ref(false)
 const notes = ref('')
+const prescriptionTitle = ref('')
 const editingId = ref('')
 const currentPage = ref(1)
 const searchKeyword = ref('')
@@ -311,14 +378,20 @@ const dialog = ref({
   action: null,
 })
 
-const inputRows = ref([createEmptyRow()])
+const inputRows = ref(createDefaultRows())
 
 function createEmptyRow(data = {}) {
   return {
     key: crypto.randomUUID(),
     name: data.name || '',
-    grams: data.grams || '',
+    pinyin: data.pinyin || '',
+    grams: data.grams || DEFAULT_GRAMS,
+    pinyinEdited: Boolean(data.pinyinEdited),
   }
+}
+
+function createDefaultRows() {
+  return Array.from({ length: DEFAULT_ROWS }, () => createEmptyRow())
 }
 
 function showToast(message, type = 'success') {
@@ -377,7 +450,8 @@ function normalizeString(value) {
 }
 
 function sanitizeGrams(value) {
-  return String(value || '').trim()
+  const clean = String(value || '').trim()
+  return clean || DEFAULT_GRAMS
 }
 
 function filterGramsInput(value) {
@@ -389,25 +463,13 @@ function filterGramsInput(value) {
     cleaned = `${parts[0]}.${parts.slice(1).join('')}`
   }
 
-  return cleaned
+  return cleaned || DEFAULT_GRAMS
 }
 
 function handleGramsInput(event, row) {
   const cleaned = filterGramsInput(event.target.value)
   row.grams = cleaned
   event.target.value = cleaned
-}
-
-function formatHerbDisplay(name, grams) {
-  const cleanName = String(name || '').trim()
-  const cleanGrams = sanitizeGrams(grams)
-  return cleanGrams ? `${cleanName} ${cleanGrams}g` : cleanName
-}
-
-function buildMetaDisplay(herb, grams) {
-  const category = normalizeCategoryName(herb?.category)
-  const doseText = sanitizeGrams(grams) ? ` · ${sanitizeGrams(grams)}g` : ''
-  return `${category}${doseText}`
 }
 
 function getAlphabetLabel(index) {
@@ -425,6 +487,40 @@ function getAlphabetLabel(index) {
 
 function isRealHerb(herb) {
   return herb?.nameCn && herb.nameCn !== '添加药材'
+}
+
+function getHerbPinyin(herb) {
+  return String(
+    herb?.pinyin || herb?.namePinyin || herb?.pinyinPlain || herb?.romanization || '',
+  ).trim()
+}
+
+function hasChinese(value) {
+  return /[\u4e00-\u9fff]/.test(String(value || ''))
+}
+
+function normalizeAutoPinyin(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function generatePinyinFromChinese(text) {
+  const source = String(text || '').trim()
+  if (!source || !hasChinese(source)) return ''
+
+  try {
+    return normalizeAutoPinyin(
+      toPinyin(source, {
+        toneType: 'none',
+        type: 'array',
+      }).join(' '),
+    )
+  } catch (error) {
+    console.error('generatePinyinFromChinese error:', error)
+    return ''
+  }
 }
 
 async function loadHerbs() {
@@ -456,6 +552,40 @@ onMounted(async () => {
 watch([searchKeyword, searchField], () => {
   currentPage.value = 1
 })
+
+watch(
+  inputRows,
+  (rows) => {
+    rows.forEach((row) => {
+      const currentName = String(row.name || '').trim()
+      const matched = getMatchedHerb(currentName)
+
+      if (!row.pinyinEdited && !String(row.pinyin || '').trim()) {
+        if (matched) {
+          const herbStoredPinyin = getHerbPinyin(matched)
+          if (herbStoredPinyin) {
+            row.pinyin = normalizeAutoPinyin(herbStoredPinyin)
+          } else {
+            const generated = generatePinyinFromChinese(currentName)
+            if (generated) {
+              row.pinyin = generated
+            }
+          }
+        } else {
+          const generated = generatePinyinFromChinese(currentName)
+          if (generated) {
+            row.pinyin = generated
+          }
+        }
+      }
+
+      if (!String(row.grams || '').trim()) {
+        row.grams = DEFAULT_GRAMS
+      }
+    })
+  },
+  { deep: true },
+)
 
 const orderedRealHerbs = computed(() => {
   return herbs.value
@@ -490,6 +620,7 @@ const herbLookupList = computed(() => {
     return {
       ...item,
       sequenceCode: `${categoryMeta?.letter || ''}${Number(item.defaultOrder || 0)}`,
+      herbPinyin: getHerbPinyin(item),
     }
   })
 })
@@ -543,6 +674,38 @@ function getLiveSequenceCode(savedHerb) {
   return liveHerb?.sequenceCode || savedHerb?.sequenceCode || ''
 }
 
+function getResolvedRowPinyin(row, matched) {
+  return normalizeAutoPinyin(
+    row?.pinyin || matched?.herbPinyin || generatePinyinFromChinese(row?.name),
+  )
+}
+
+function buildMetaDisplay(herb, row) {
+  const category = normalizeCategoryName(herb?.category)
+  const doseText = `${sanitizeGrams(row?.grams)}g`
+  const pinyinText = getResolvedRowPinyin(row, herb)
+  return pinyinText ? `${category} · ${pinyinText} · ${doseText}` : `${category} · ${doseText}`
+}
+
+function handleNameInput(row) {
+  const currentName = String(row.name || '').trim()
+  const matched = getMatchedHerb(currentName)
+
+  if (row.pinyinEdited) return
+
+  if (matched) {
+    const herbStoredPinyin = getHerbPinyin(matched)
+    row.pinyin = normalizeAutoPinyin(herbStoredPinyin || generatePinyinFromChinese(currentName))
+    return
+  }
+
+  row.pinyin = generatePinyinFromChinese(currentName)
+}
+
+function markPinyinAsManual(row) {
+  row.pinyinEdited = true
+}
+
 const previewItems = computed(() => {
   return inputRows.value
     .map((row) => {
@@ -557,6 +720,7 @@ const previewItems = computed(() => {
         defaultOrder: Number(matched.defaultOrder || 0),
         sequenceCode: matched.sequenceCode,
         grams: sanitizeGrams(row.grams),
+        pinyin: getResolvedRowPinyin(row, matched),
         matched: true,
       }
     })
@@ -565,6 +729,18 @@ const previewItems = computed(() => {
 
 const unmatchedCount = computed(() => {
   return inputRows.value.filter((row) => row.name && !getMatchedHerb(row.name)).length
+})
+
+const previewDisplayTitle = computed(() => {
+  return prescriptionTitle.value || 'Untitled Prescription'
+})
+
+const previewNowText = computed(() => {
+  return new Date().toLocaleString()
+})
+
+const canExportCurrent = computed(() => {
+  return previewItems.value.length > 0
 })
 
 function addRow() {
@@ -591,9 +767,15 @@ function confirmRemoveRow(index) {
   })
 }
 
+function resetToDefaultRows() {
+  inputRows.value = createDefaultRows()
+  showToast('Reset to 15 default rows')
+}
+
 function clearAll() {
-  inputRows.value = [createEmptyRow()]
+  inputRows.value = createDefaultRows()
   notes.value = ''
+  prescriptionTitle.value = ''
   editingId.value = ''
 }
 
@@ -620,7 +802,9 @@ async function savePrescription() {
     const rows = inputRows.value
       .map((row) => ({
         name: String(row.name || '').trim(),
+        pinyin: normalizeAutoPinyin(row.pinyin),
         grams: sanitizeGrams(row.grams),
+        pinyinEdited: Boolean(row.pinyinEdited),
       }))
       .filter((row) => row.name)
 
@@ -646,12 +830,16 @@ async function savePrescription() {
         sequenceCode: matched.sequenceCode,
         groupOrder: Number(matched.groupOrder || 0),
         defaultOrder: Number(matched.defaultOrder || 0),
-        grams: row.grams || '',
+        grams: row.grams,
+        pinyin: normalizeAutoPinyin(
+          row.pinyin || matched.herbPinyin || generatePinyinFromChinese(row.name),
+        ),
         matched: true,
       }
     })
 
     const payload = {
+      title: prescriptionTitle.value || '',
       notes: notes.value || '',
       items,
       createdBy: getOperator(),
@@ -686,11 +874,14 @@ function editPrescription(item) {
       ? item.items.map((herb) =>
           createEmptyRow({
             name: herb.herbName || herb.inputName || '',
-            grams: herb.grams || '',
+            pinyin: herb.pinyin || '',
+            grams: herb.grams || DEFAULT_GRAMS,
+            pinyinEdited: Boolean(herb.pinyin),
           }),
         )
-      : [createEmptyRow()]
+      : createDefaultRows()
 
+  prescriptionTitle.value = item.title || ''
   notes.value = item.notes || ''
   editingId.value = item.id
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -738,6 +929,107 @@ function formatDate(value) {
   return date.toLocaleString()
 }
 
+function buildExportRowsFromPrescription(payload) {
+  const titleText = payload.title || 'Untitled Prescription'
+  const notesText = payload.notes || ''
+
+  return (payload.items || []).map((item, index) => ({
+    处方名: index === 0 ? titleText : '',
+    序号: getLiveSequenceCode(item) || item.sequenceCode || '',
+    药名: item.herbName || item.inputName || '',
+    拼音: item.pinyin || '',
+    克数: `${item.grams || DEFAULT_GRAMS}g`,
+    分类: normalizeCategoryName(item.category || ''),
+    Notes: index === 0 ? notesText : '',
+  }))
+}
+
+function buildExportRowsForAllPrescriptions(list) {
+  const rows = []
+
+  list.forEach((prescription, prescriptionIndex) => {
+    const prescriptionRows = buildExportRowsFromPrescription(prescription)
+    rows.push(...prescriptionRows)
+
+    if (prescriptionIndex !== list.length - 1) {
+      rows.push({
+        处方名: '',
+        序号: '',
+        药名: '',
+        拼音: '',
+        克数: '',
+        分类: '',
+        Notes: '',
+      })
+    }
+  })
+
+  return rows
+}
+
+function exportWorkbook(rows, filenameBase, sheetName = 'Prescription') {
+  const worksheet = XLSX.utils.json_to_sheet(rows)
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
+
+  const safeName = String(filenameBase || 'prescription')
+    .replace(/[\\/:*?"<>|]/g, '')
+    .trim()
+
+  XLSX.writeFile(workbook, `${safeName || 'prescription'}.xlsx`)
+}
+
+function exportCurrentPrescription() {
+  try {
+    if (!previewItems.value.length) {
+      showToast('No matched herbs to export', 'error')
+      return
+    }
+
+    const payload = {
+      title: previewDisplayTitle.value,
+      notes: notes.value || '',
+      items: previewItems.value.map((item) => ({
+        ...item,
+      })),
+    }
+
+    const rows = buildExportRowsFromPrescription(payload)
+    exportWorkbook(rows, payload.title || 'prescription', 'Prescription')
+    showToast('Prescription exported')
+  } catch (error) {
+    console.error('exportCurrentPrescription error:', error)
+    showToast('Export failed', 'error')
+  }
+}
+
+function exportSavedPrescription(item) {
+  try {
+    const rows = buildExportRowsFromPrescription(item)
+    exportWorkbook(rows, item.title || 'prescription', 'Prescription')
+    showToast('Prescription exported')
+  } catch (error) {
+    console.error('exportSavedPrescription error:', error)
+    showToast('Export failed', 'error')
+  }
+}
+
+function exportAllPrescriptions() {
+  try {
+    if (!prescriptions.value.length) {
+      showToast('No prescriptions to export', 'error')
+      return
+    }
+
+    const rows = buildExportRowsForAllPrescriptions(prescriptions.value)
+    exportWorkbook(rows, 'all-prescriptions', 'Prescriptions')
+    showToast('All prescriptions exported')
+  } catch (error) {
+    console.error('exportAllPrescriptions error:', error)
+    showToast('Export failed', 'error')
+  }
+}
+
 const filteredPrescriptions = computed(() => {
   const keyword = normalizeString(searchKeyword.value)
 
@@ -746,15 +1038,22 @@ const filteredPrescriptions = computed(() => {
   return prescriptions.value.filter((item) => {
     const dateText = normalizeString(formatDate(item.createdAt))
     const notesText = normalizeString(item.notes)
+    const titleText = normalizeString(item.title)
     const herbText = normalizeString(
       (item.items || [])
         .map((herb) => {
           const liveCode = getLiveSequenceCode(herb)
-          const liveName = formatHerbDisplay(herb.herbName || herb.inputName, herb.grams)
-          return `${liveCode} ${liveName}`
+          const herbName = herb.herbName || herb.inputName || ''
+          const herbPinyin = herb.pinyin || ''
+          const herbDose = `${herb.grams || DEFAULT_GRAMS}g`
+          return `${liveCode} ${herbName} ${herbPinyin} ${herbDose}`
         })
         .join(' '),
     )
+
+    if (searchField.value === 'title') {
+      return titleText.includes(keyword)
+    }
 
     if (searchField.value === 'date') {
       return dateText.includes(keyword)
@@ -768,7 +1067,12 @@ const filteredPrescriptions = computed(() => {
       return herbText.includes(keyword)
     }
 
-    return dateText.includes(keyword) || notesText.includes(keyword) || herbText.includes(keyword)
+    return (
+      titleText.includes(keyword) ||
+      dateText.includes(keyword) ||
+      notesText.includes(keyword) ||
+      herbText.includes(keyword)
+    )
   })
 })
 
@@ -839,6 +1143,39 @@ function goToNextPage() {
   justify-content: flex-end;
 }
 
+.top-form-card {
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+.top-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 14px;
+}
+
+.top-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compact-field {
+  max-width: 120px;
+}
+
+.row-count-box {
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid #d8dee7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fbf9;
+  font-weight: 800;
+  color: #184c3b;
+}
+
 .primary-btn,
 .ghost-btn,
 .remove-btn,
@@ -897,7 +1234,7 @@ function goToNextPage() {
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
   gap: 20px;
 }
 
@@ -913,6 +1250,12 @@ function goToNextPage() {
   margin: 0;
   font-size: 22px;
   color: #173c2f;
+}
+
+.history-top-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .section-badge {
@@ -962,6 +1305,9 @@ function goToNextPage() {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  max-height: 980px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .input-row-card {
@@ -986,11 +1332,15 @@ function goToNextPage() {
 
 .row-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
   gap: 12px;
 }
 
+.row-fields-3 {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.8fr) 110px;
+}
+
 .name-field,
+.pinyin-field,
 .gram-field {
   display: flex;
   flex-direction: column;
@@ -1098,6 +1448,31 @@ function goToNextPage() {
   font-size: 14px;
 }
 
+.preview-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #f8fbf9;
+  border: 1px solid #e7eeea;
+}
+
+.preview-title-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  color: #355447;
+}
+
+.preview-title-label {
+  font-weight: 700;
+  color: #6b7280;
+}
+
 .preview-list {
   display: flex;
   flex-direction: column;
@@ -1113,7 +1488,7 @@ function goToNextPage() {
 
 .preview-left {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
 }
 
@@ -1129,6 +1504,13 @@ function goToNextPage() {
   font-size: 15px;
   font-weight: 800;
   color: #173c2f;
+}
+
+.preview-pinyin {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #355447;
+  font-weight: 700;
 }
 
 .preview-category {
@@ -1159,27 +1541,11 @@ function goToNextPage() {
   font-weight: 700;
 }
 
-.history-card {
-  margin-top: 0;
-}
-
-.history-top {
-  align-items: flex-start;
-}
-
-.history-subtitle {
-  display: inline-block;
-  margin-top: 6px;
-  color: #6b7280;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .history-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
-  gap: 12px;
-  margin-bottom: 18px;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
 .history-list {
@@ -1240,39 +1606,36 @@ function goToNextPage() {
   padding: 12px 14px;
   border-radius: 14px;
   background: #ffffff;
-  border: 1px solid #e8ecef;
+  border: 1px solid #edf2ef;
 }
 
 .history-notes-label {
   display: inline-block;
-  margin-bottom: 6px;
   font-size: 12px;
   font-weight: 800;
-  color: #355447;
+  color: #6b7280;
+  margin-bottom: 6px;
 }
 
 .history-notes-text {
   margin: 0;
-  color: #4b5563;
+  color: #355447;
   font-size: 14px;
   line-height: 1.6;
-  white-space: pre-wrap;
 }
 
 .pagination-bar {
   display: flex;
-  align-items: center;
   justify-content: center;
+  align-items: center;
   gap: 14px;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 .page-indicator {
-  min-width: 120px;
-  text-align: center;
-  color: #355447;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
+  color: #355447;
 }
 
 .empty-state {
@@ -1305,12 +1668,16 @@ function goToNextPage() {
 }
 
 .toast-fade-enter-active,
-.toast-fade-leave-active {
+.toast-fade-leave-active,
+.dialog-fade-enter-active,
+.dialog-fade-leave-active {
   transition: all 0.25s ease;
 }
 
 .toast-fade-enter-from,
-.toast-fade-leave-to {
+.toast-fade-leave-to,
+.dialog-fade-enter-from,
+.dialog-fade-leave-to {
   opacity: 0;
   transform: translateY(10px);
 }
@@ -1318,35 +1685,35 @@ function goToNextPage() {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.36);
+  background: rgba(15, 23, 42, 0.35);
   backdrop-filter: blur(3px);
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  z-index: 1100;
 }
 
 .dialog-card {
-  width: 100%;
-  max-width: 420px;
+  width: min(100%, 420px);
   background: #ffffff;
   border-radius: 24px;
-  padding: 28px 24px 22px;
+  padding: 22px;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  border: 1px solid rgba(15, 23, 42, 0.05);
   text-align: center;
 }
 
 .dialog-icon {
-  width: 54px;
-  height: 54px;
-  border-radius: 999px;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 16px;
-  font-size: 24px;
-  font-weight: 800;
+  margin: 0 auto 14px;
+  font-size: 22px;
+  font-weight: 900;
 }
 
 .dialog-icon.neutral {
@@ -1361,32 +1728,26 @@ function goToNextPage() {
 
 .dialog-title {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   color: #173c2f;
-  font-weight: 800;
 }
 
 .dialog-message {
   margin: 10px 0 0;
   color: #6b7280;
-  font-size: 14px;
   line-height: 1.6;
-  font-weight: 600;
+  font-size: 14px;
 }
 
 .dialog-actions {
+  margin-top: 18px;
   display: flex;
   justify-content: center;
-  gap: 12px;
-  margin-top: 22px;
+  gap: 10px;
 }
 
 .dialog-btn {
-  min-width: 110px;
-}
-
-.dialog-confirm-btn {
-  min-width: 110px;
+  min-width: 100px;
 }
 
 .dialog-confirm-btn.neutral {
@@ -1399,26 +1760,18 @@ function goToNextPage() {
   color: #fff;
 }
 
-.dialog-fade-enter-active,
-.dialog-fade-leave-active {
-  transition: all 0.22s ease;
-}
-
-.dialog-fade-enter-from,
-.dialog-fade-leave-to {
-  opacity: 0;
-}
-
-.dialog-fade-enter-from .dialog-card,
-.dialog-fade-leave-to .dialog-card {
-  transform: translateY(10px) scale(0.98);
-}
-
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .content-grid {
     grid-template-columns: 1fr;
   }
+}
 
+@media (max-width: 860px) {
+  .row-fields-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .top-form-grid,
   .history-toolbar {
     grid-template-columns: 1fr;
   }
@@ -1438,30 +1791,13 @@ function goToNextPage() {
     font-size: 28px;
   }
 
-  .row-fields {
-    grid-template-columns: 1fr;
-  }
-
   .history-item-top {
     flex-direction: column;
-    align-items: stretch;
   }
 
-  .history-item-actions {
-    justify-content: flex-start;
-  }
-
-  .pagination-bar {
-    flex-wrap: wrap;
-  }
-
-  .dialog-actions {
-    flex-direction: column;
-  }
-
-  .dialog-btn,
-  .dialog-confirm-btn {
+  .history-top-right {
     width: 100%;
+    justify-content: space-between;
   }
 }
 </style>
