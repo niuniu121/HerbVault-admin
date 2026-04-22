@@ -29,14 +29,24 @@
           <span>Herbs</span>
         </RouterLink>
 
-        <RouterLink to="/history" class="nav-link" @click="handleNavClick">
-          <span class="nav-icon">↺</span>
-          <span>History</span>
-        </RouterLink>
-
         <RouterLink to="/prescriptions" class="nav-link" @click="handleNavClick">
           <span class="nav-icon">✎</span>
           <span>Prescriptions</span>
+        </RouterLink>
+
+        <RouterLink to="/herb-knowledge" class="nav-link" @click="handleNavClick">
+          <span class="nav-icon">☰</span>
+          <span>Herbal Notes</span>
+        </RouterLink>
+
+        <RouterLink to="/issued-prescriptions" class="nav-link" @click="handleNavClick">
+          <span class="nav-icon">☷</span>
+          <span>Prescription Details</span>
+        </RouterLink>
+
+        <RouterLink to="/history" class="nav-link" @click="handleNavClick">
+          <span class="nav-icon">↺</span>
+          <span>History</span>
         </RouterLink>
 
         <RouterLink to="/settings" class="nav-link" @click="handleNavClick">

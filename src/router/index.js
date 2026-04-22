@@ -6,6 +6,8 @@ import HerbListView from '../views/HerbListView.vue'
 import StockHistoryView from '../views/StockHistoryView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import PrescriptionView from '../views/PrescriptionView.vue'
+import HerbKnowledgeView from '../views/HerbKnowledgeView.vue'
+import IssuedPrescriptionsView from '../views/IssuedPrescriptionsView.vue'
 
 const routes = [
   {
@@ -44,6 +46,16 @@ const routes = [
       {
         path: '/prescriptions',
         component: PrescriptionView,
+      },
+      {
+        path: '/herb-knowledge',
+        name: 'HerbKnowledge',
+        component: HerbKnowledgeView,
+      },
+      {
+        path: '/issued-prescriptions',
+        name: 'IssuedPrescriptions',
+        component: IssuedPrescriptionsView,
       }
     ],
   },
