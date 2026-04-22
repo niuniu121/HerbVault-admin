@@ -57,7 +57,7 @@
             class="row-input"
             type="text"
             inputmode="decimal"
-            placeholder="e.g. 4"
+            placeholder=""
             @input="handleSpoonsPerTimeInput"
           />
         </div>
@@ -69,7 +69,7 @@
             class="row-input"
             type="text"
             inputmode="decimal"
-            placeholder="e.g. 2"
+            placeholder=""
             @input="handleTimesPerDayInput"
           />
         </div>
@@ -81,7 +81,7 @@
             class="row-input"
             type="text"
             inputmode="decimal"
-            placeholder="e.g. 7"
+            placeholder=""
             @input="handleTotalDaysInput"
           />
         </div>
