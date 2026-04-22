@@ -7,7 +7,7 @@
 
       <div class="header-actions">
         <button class="ghost-btn" @click="addRow">Add Row</button>
-        <button class="ghost-btn" @click="confirmResetRows">Reset 15 Rows</button>
+        <button class="ghost-btn" @click="confirmResetRows">Reset 25 Rows</button>
         <button class="ghost-btn" @click="clearAll">Clear</button>
         <button class="ghost-btn" :disabled="!canExportCurrent" @click="exportCurrentPrescription">
           Export Excel
@@ -27,27 +27,74 @@
     </section>
 
     <section class="top-form-card card">
-      <div class="top-form-grid top-form-grid-3">
+      <div class="top-form-grid top-form-grid-main">
         <div class="top-form-field">
           <label class="field-label">Prescription Name</label>
           <input v-model.trim="prescriptionTitle" class="row-input" type="text" placeholder="" />
         </div>
 
-        <div class="top-form-field compact-target-field">
-          <label class="field-label">Target Total (g)</label>
-          <input
-            :value="targetTotalGrams"
-            class="row-input"
-            type="text"
-            inputmode="decimal"
-            placeholder=""
-            @input="handleTargetTotalInput"
-          />
-        </div>
-
         <div class="top-form-field compact-field">
           <label class="field-label">Rows</label>
           <div class="row-count-box">{{ inputRows.length }}</div>
+        </div>
+      </div>
+
+      <div class="ratio-info-bar">
+        <div class="ratio-info-left">
+          <span class="ratio-info-label">Granule Ratio</span>
+          <span class="ratio-info-value">{{ GRANULE_RATIO }}</span>
+        </div>
+        <!-- <div class="ratio-info-note">
+          1g granules ≡ {{ GRANULE_RATIO }}g raw herbs · 1 spoon ≡ {{ GRAMS_PER_SPOON }}g granules
+        </div> -->
+      </div>
+
+      <div class="dosing-grid">
+        <div class="top-form-field">
+          <label class="field-label">Spoons / Time (勺/次)</label>
+          <input
+            :value="spoonsPerTime"
+            class="row-input"
+            type="text"
+            inputmode="decimal"
+            placeholder="e.g. 4"
+            @input="handleSpoonsPerTimeInput"
+          />
+        </div>
+
+        <div class="top-form-field">
+          <label class="field-label">Times / Day (次/天)</label>
+          <input
+            :value="timesPerDay"
+            class="row-input"
+            type="text"
+            inputmode="decimal"
+            placeholder="e.g. 2"
+            @input="handleTimesPerDayInput"
+          />
+        </div>
+
+        <div class="top-form-field">
+          <label class="field-label">Days (天)</label>
+          <input
+            :value="totalDays"
+            class="row-input"
+            type="text"
+            inputmode="decimal"
+            placeholder="e.g. 7"
+            @input="handleTotalDaysInput"
+          />
+        </div>
+
+        <div class="top-form-field">
+          <label class="field-label">Target Total (g)</label>
+          <div class="target-total-box">
+            <span class="target-total-value">{{ targetTotalNumber }}g</span>
+            <span class="target-total-formula">
+              {{ toNumber(spoonsPerTime) }} × {{ GRAMS_PER_SPOON }} × {{ toNumber(timesPerDay) }} ×
+              {{ toNumber(totalDays) }}
+            </span>
+          </div>
         </div>
       </div>
     </section>
@@ -190,6 +237,12 @@
                 <div class="preview-category">
                   {{ normalizeCategoryName(item.category) }}
                 </div>
+                <div class="preview-raw" v-if="item.rawGrams !== item.grams">
+                  <span class="preview-raw-label">Rx</span>
+                  <span class="preview-raw-value">{{ item.rawGrams }}g</span>
+                  <span class="preview-raw-arrow">→</span>
+                  <span class="preview-raw-scaled">{{ item.grams }}g</span>
+                </div>
               </div>
             </div>
           </div>
@@ -213,7 +266,11 @@
             <strong>{{ unmatchedCount }}</strong>
           </div>
           <div class="summary-row">
-            <span>Raw Input Sum</span>
+            <span>Granule Ratio</span>
+            <strong>{{ GRANULE_RATIO }}</strong>
+          </div>
+          <div class="summary-row">
+            <span>Raw Sum</span>
             <strong>{{ rawInputTotalGrams }}g</strong>
           </div>
           <div class="summary-row">
@@ -224,10 +281,10 @@
             <span>Target Total</span>
             <strong>{{ targetTotalNumber }}g</strong>
           </div>
-          <div class="summary-row">
+          <!-- <div class="summary-row">
             <span>Status</span>
             <strong>{{ previewStatusText }}</strong>
-          </div>
+          </div> -->
         </div>
       </div>
     </section>
@@ -379,12 +436,16 @@ import {
 const HERBS = 'herbs'
 const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
-const DEFAULT_ROWS = 15
+const DEFAULT_ROWS = 25
 const DEFAULT_GRAMS = '10'
-// Default target follows the Excel workbook default:
-//   GramsEachTime (10g) * TimesPerDay (2) * TotalDays (14) = 280g
-// Admins can freely overwrite or clear this value.
-const DEFAULT_TARGET_TOTAL = '84'
+// Each spoon of granules weighs ~1.5g. This constant together with the three
+// admin-editable fields below drive the Target Total:
+//   Target Total = spoonsPerTime * GRAMS_PER_SPOON * timesPerDay * totalDays
+// Example: 4 spoons * 1.5g * 2 times * 7 days = 84g
+const GRAMS_PER_SPOON = 1.5
+const DEFAULT_SPOONS_PER_TIME = '4'
+const DEFAULT_TIMES_PER_DAY = '2'
+const DEFAULT_TOTAL_DAYS = '7'
 // Concentration ratio from the workbook (column B of HerbList). Every herb in
 // the source spreadsheet uses 5, so we keep it as a single constant. If you
 // ever store per-herb ratios, swap this out for a lookup.
@@ -399,7 +460,11 @@ const editingId = ref('')
 const currentPage = ref(1)
 const searchKeyword = ref('')
 const searchField = ref('all')
-const targetTotalGrams = ref(DEFAULT_TARGET_TOTAL)
+
+// Admin-editable dosing inputs. Target Total is derived from these.
+const spoonsPerTime = ref(DEFAULT_SPOONS_PER_TIME)
+const timesPerDay = ref(DEFAULT_TIMES_PER_DAY)
+const totalDays = ref(DEFAULT_TOTAL_DAYS)
 
 const toast = ref({
   show: false,
@@ -527,11 +592,24 @@ function normalizeGramsOnBlur(row) {
   row.grams = sanitizeGrams(row.grams)
 }
 
-// Admins can type any number — including clearing the field entirely — so we
-// simply mirror the cleaned input here. Fallbacks only apply at save time.
-function handleTargetTotalInput(event) {
+// Admins can type any decimal number in each of the three dosing fields. The
+// Target Total is derived from them, so there is no fallback here — empty
+// values are treated as 0 until save time.
+function handleSpoonsPerTimeInput(event) {
   const cleaned = filterDecimalInput(event.target.value)
-  targetTotalGrams.value = cleaned
+  spoonsPerTime.value = cleaned
+  event.target.value = cleaned
+}
+
+function handleTimesPerDayInput(event) {
+  const cleaned = filterDecimalInput(event.target.value)
+  timesPerDay.value = cleaned
+  event.target.value = cleaned
+}
+
+function handleTotalDaysInput(event) {
+  const cleaned = filterDecimalInput(event.target.value)
+  totalDays.value = cleaned
   event.target.value = cleaned
 }
 
@@ -831,7 +909,7 @@ const previewItems = computed(() => {
 
   if (!namedMatchedRows.length) return []
 
-  const target = toNumber(targetTotalGrams.value)
+  const target = targetTotalNumber.value
   const rawTotal = namedMatchedRows.reduce(
     (sum, { row }) => sum + toNumber(sanitizeGrams(row.grams)),
     0,
@@ -862,6 +940,10 @@ const previewItems = computed(() => {
       groupOrder: Number(matched.groupOrder || 0),
       defaultOrder: Number(matched.defaultOrder || 0),
       sequenceCode: matched.sequenceCode,
+      // Preserve the doctor's original prescribed grams so the Rx logic stays
+      // visible — raw grams act as relative proportions, `grams` is the
+      // final scaled dose for the granule dispensing.
+      rawGrams: sanitizeGrams(row.grams),
       grams: displayGrams,
       pinyin: getResolvedRowPinyin(row, matched),
       matched: true,
@@ -897,8 +979,14 @@ const previewTotalGrams = computed(() => {
   return roundTo2(previewItems.value.reduce((sum, item) => sum + toNumber(item.grams), 0))
 })
 
+// Target Total is derived from the three dosing fields:
+//   Target Total = spoonsPerTime * GRAMS_PER_SPOON * timesPerDay * totalDays
+// Example: 4 * 1.5 * 2 * 7 = 84g
 const targetTotalNumber = computed(() => {
-  return roundTo2(toNumber(targetTotalGrams.value))
+  const spoons = toNumber(spoonsPerTime.value)
+  const times = toNumber(timesPerDay.value)
+  const days = toNumber(totalDays.value)
+  return roundTo2(spoons * GRAMS_PER_SPOON * times * days)
 })
 
 const previewStatusText = computed(() => {
@@ -934,7 +1022,7 @@ function confirmRemoveRow(index) {
 function confirmResetRows() {
   openDialog({
     title: 'Reset all rows?',
-    message: 'This will reset the current input back to 15 default rows.',
+    message: 'This will reset the current input back to 25 default rows.',
     confirmText: 'Reset',
     type: 'neutral',
     action: () => {
@@ -953,7 +1041,9 @@ function clearAll() {
   notes.value = ''
   prescriptionTitle.value = ''
   editingId.value = ''
-  targetTotalGrams.value = DEFAULT_TARGET_TOTAL
+  spoonsPerTime.value = DEFAULT_SPOONS_PER_TIME
+  timesPerDay.value = DEFAULT_TIMES_PER_DAY
+  totalDays.value = DEFAULT_TOTAL_DAYS
 }
 
 function cancelEdit() {
@@ -1001,12 +1091,16 @@ async function savePrescription() {
       return
     }
 
-    const target = toNumber(targetTotalGrams.value)
+    const target = targetTotalNumber.value
 
     if (target <= 0) {
-      showToast('Target total must be greater than 0', 'error')
+      showToast('Please set spoons, times per day, and days (Target Total must be > 0)', 'error')
       return
     }
+
+    // Capture the doctor's raw prescribed grams before scaling so we can
+    // persist them alongside the final scaled grams.
+    const rawGramsByKey = new Map(rawRows.map((row) => [row.key, sanitizeGrams(row.grams)]))
 
     // Apply the Excel formula at save time.
     const rows = scaleRowsToTarget(rawRows, target)
@@ -1033,7 +1127,9 @@ async function savePrescription() {
         sequenceCode: matched.sequenceCode,
         groupOrder: Number(matched.groupOrder || 0),
         defaultOrder: Number(matched.defaultOrder || 0),
+        rawGrams: rawGramsByKey.get(row.key) || row.grams,
         grams: row.grams,
+        granuleRatio: GRANULE_RATIO,
         pinyin: normalizeAutoPinyin(
           row.pinyin || matched.herbPinyin || generatePinyinFromChinese(row.name),
         ),
@@ -1045,6 +1141,11 @@ async function savePrescription() {
       title: prescriptionTitle.value || '',
       notes: notes.value || '',
       targetTotal: String(target),
+      spoonsPerTime: String(toNumber(spoonsPerTime.value)),
+      timesPerDay: String(toNumber(timesPerDay.value)),
+      totalDays: String(toNumber(totalDays.value)),
+      gramsPerSpoon: String(GRAMS_PER_SPOON),
+      granuleRatio: String(GRANULE_RATIO),
       items,
       createdBy: getOperator(),
       updatedAt: serverTimestamp(),
@@ -1079,7 +1180,9 @@ function editPrescription(item) {
           createEmptyRow({
             name: herb.herbName || herb.inputName || '',
             pinyin: herb.pinyin || '',
-            grams: herb.grams || DEFAULT_GRAMS,
+            // Prefer the doctor's raw prescribed grams when we have them so
+            // editing a saved prescription still shows the original Rx.
+            grams: herb.rawGrams || herb.grams || DEFAULT_GRAMS,
             pinyinEdited: Boolean(herb.pinyin),
           }),
         )
@@ -1088,7 +1191,32 @@ function editPrescription(item) {
   prescriptionTitle.value = item.title || ''
   notes.value = item.notes || ''
   editingId.value = item.id
-  targetTotalGrams.value = item.targetTotal || DEFAULT_TARGET_TOTAL
+
+  // Legacy prescriptions may only have a raw `targetTotal` and no dosing
+  // breakdown. In that case, back-derive a best-guess by pinning times/day and
+  // days to the defaults and solving for spoons-per-time so the computed
+  // Target Total matches what was saved.
+  if (item.spoonsPerTime || item.timesPerDay || item.totalDays) {
+    spoonsPerTime.value = item.spoonsPerTime || DEFAULT_SPOONS_PER_TIME
+    timesPerDay.value = item.timesPerDay || DEFAULT_TIMES_PER_DAY
+    totalDays.value = item.totalDays || DEFAULT_TOTAL_DAYS
+  } else if (item.targetTotal) {
+    const savedTarget = toNumber(item.targetTotal)
+    const times = toNumber(DEFAULT_TIMES_PER_DAY)
+    const days = toNumber(DEFAULT_TOTAL_DAYS)
+    const derivedSpoons =
+      times > 0 && days > 0
+        ? savedTarget / (GRAMS_PER_SPOON * times * days)
+        : toNumber(DEFAULT_SPOONS_PER_TIME)
+    spoonsPerTime.value = String(roundTo2(derivedSpoons))
+    timesPerDay.value = DEFAULT_TIMES_PER_DAY
+    totalDays.value = DEFAULT_TOTAL_DAYS
+  } else {
+    spoonsPerTime.value = DEFAULT_SPOONS_PER_TIME
+    timesPerDay.value = DEFAULT_TIMES_PER_DAY
+    totalDays.value = DEFAULT_TOTAL_DAYS
+  }
+
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -1143,7 +1271,9 @@ function buildExportRowsFromPrescription(payload) {
     序号: getLiveSequenceCode(item) || item.sequenceCode || '',
     药名: item.herbName || item.inputName || '',
     拼音: item.pinyin || '',
-    克数: `${item.grams || DEFAULT_GRAMS}g`,
+    '医生原方(g)': item.rawGrams ? `${item.rawGrams}g` : '',
+    '颗粒克数(g)': `${item.grams || DEFAULT_GRAMS}g`,
+    浓缩比: payload.granuleRatio || item.granuleRatio || String(GRANULE_RATIO),
     分类: normalizeCategoryName(item.category || ''),
     Notes: index === 0 ? notesText : '',
   }))
@@ -1162,7 +1292,9 @@ function buildExportRowsForAllPrescriptions(list) {
         序号: '',
         药名: '',
         拼音: '',
-        克数: '',
+        '医生原方(g)': '',
+        '颗粒克数(g)': '',
+        浓缩比: '',
         分类: '',
         Notes: '',
       })
@@ -1359,8 +1491,66 @@ function goToNextPage() {
   gap: 14px;
 }
 
-.top-form-grid-3 {
-  grid-template-columns: minmax(0, 1fr) 150px 120px;
+.top-form-grid-main {
+  grid-template-columns: minmax(0, 1fr) 120px;
+  margin-bottom: 14px;
+}
+
+.ratio-info-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: #eef5f1;
+  border: 1px solid #d9eee1;
+}
+
+.ratio-info-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ratio-info-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #355447;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.ratio-info-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #184c3b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ratio-info-note {
+  font-size: 12px;
+  color: #355447;
+  font-weight: 700;
+  opacity: 0.82;
+}
+
+.dosing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: #f8fbf9;
+  border: 1px solid #e7eeea;
 }
 
 .top-form-field {
@@ -1373,8 +1563,35 @@ function goToNextPage() {
   max-width: 120px;
 }
 
-.compact-target-field {
-  max-width: 150px;
+.target-total-box {
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid #184c3b;
+  background: #eef5f1;
+  color: #184c3b;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 14px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.target-total-value {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.target-total-formula {
+  font-size: 11px;
+  font-weight: 700;
+  color: #355447;
+  opacity: 0.75;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .row-count-box {
@@ -1733,6 +1950,40 @@ function goToNextPage() {
   font-weight: 700;
 }
 
+.preview-raw {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px dashed #d9e1db;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.preview-raw-label {
+  color: #355447;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.preview-raw-value {
+  color: #6b7280;
+}
+
+.preview-raw-arrow {
+  color: #9aa5ad;
+}
+
+.preview-raw-scaled {
+  color: #184c3b;
+  font-weight: 800;
+}
+
 .divider {
   height: 1px;
   background: #edf2ef;
@@ -1985,7 +2236,18 @@ function goToNextPage() {
   }
 
   .top-form-grid,
+  .top-form-grid-main,
   .history-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .dosing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .dosing-grid {
     grid-template-columns: 1fr;
   }
 }
