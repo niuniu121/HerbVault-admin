@@ -1033,7 +1033,7 @@ function confirmResetRows() {
 
 function resetToDefaultRows() {
   inputRows.value = createDefaultRows()
-  showToast('Reset to 15 default rows')
+  showToast('Reset to 25 default rows')
 }
 
 function clearAll() {
