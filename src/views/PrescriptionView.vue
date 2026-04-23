@@ -44,9 +44,6 @@
           <span class="ratio-info-label">Granule Ratio</span>
           <span class="ratio-info-value">{{ GRANULE_RATIO }}</span>
         </div>
-        <!-- <div class="ratio-info-note">
-          1g granules ≡ {{ GRANULE_RATIO }}g raw herbs · 1 spoon ≡ {{ GRAMS_PER_SPOON }}g granules
-        </div> -->
       </div>
 
       <div class="dosing-grid">
@@ -281,10 +278,6 @@
             <span>Target Total</span>
             <strong>{{ targetTotalNumber }}g</strong>
           </div>
-          <!-- <div class="summary-row">
-            <span>Status</span>
-            <strong>{{ previewStatusText }}</strong>
-          </div> -->
         </div>
       </div>
     </section>
@@ -312,13 +305,13 @@
           v-model.trim="searchKeyword"
           class="search-input"
           type="text"
-          placeholder="Search by prescription name, herb, pinyin, notes, or date..."
+          placeholder="Search by prescription name, herb, pinyin, functions, notes, or date..."
         />
 
         <select v-model="searchField" class="filter-select">
           <option value="all">All</option>
           <option value="title">Prescription Name</option>
-          <option value="herb">Herb / Pinyin</option>
+          <option value="herb">Herb / Pinyin / Functions</option>
           <option value="date">Date / Time</option>
           <option value="notes">Notes</option>
         </select>
@@ -327,7 +320,7 @@
       <div v-if="paginatedPrescriptions.length" class="history-list">
         <div v-for="item in paginatedPrescriptions" :key="item.id" class="history-item">
           <div class="history-item-top">
-            <div>
+            <div class="history-item-title-wrap">
               <div class="history-title">
                 {{ item.title || 'Untitled Prescription' }}
               </div>
@@ -335,6 +328,9 @@
             </div>
 
             <div class="history-item-actions">
+              <button class="collapse-prescription-btn" @click="togglePrescriptionCard(item.id)">
+                {{ isPrescriptionCardOpen(item.id) ? 'Hide Details' : 'Show Details' }}
+              </button>
               <button class="ghost-btn small-btn" @click="exportSavedPrescription(item)">
                 Export
               </button>
@@ -345,23 +341,94 @@
             </div>
           </div>
 
-          <div class="history-tags">
-            <span
-              v-for="(herb, idx) in item.items || []"
-              :key="`${item.id}-${idx}`"
-              class="history-tag"
-            >
-              {{ getLiveSequenceCode(herb) || herb.sequenceCode }}
-              {{ herb.herbName || herb.inputName }}
-              {{ herb.grams || '10' }}g
-              <template v-if="herb.pinyin"> · {{ herb.pinyin }}</template>
-            </span>
+          <div class="history-summary-grid">
+            <div class="history-summary-box">
+              <span class="history-summary-label">Target Total</span>
+              <strong>{{ item.targetTotal || '-' }}g</strong>
+            </div>
+            <div class="history-summary-box">
+              <span class="history-summary-label">Granule Ratio</span>
+              <strong>{{ item.granuleRatio || GRANULE_RATIO }}</strong>
+            </div>
+            <div class="history-summary-box">
+              <span class="history-summary-label">Times / Day</span>
+              <strong>{{ item.timesPerDay || '-' }}</strong>
+            </div>
+            <div class="history-summary-box">
+              <span class="history-summary-label">Days</span>
+              <strong>{{ item.totalDays || '-' }}</strong>
+            </div>
           </div>
 
-          <div v-if="item.notes" class="history-notes">
-            <span class="history-notes-label">Notes</span>
-            <p class="history-notes-text">{{ item.notes }}</p>
-          </div>
+          <transition name="expand-fade">
+            <div v-if="isPrescriptionCardOpen(item.id)" class="history-expand-body">
+              <div v-if="item.notes" class="history-notes">
+                <span class="history-notes-label">Notes</span>
+                <p class="history-notes-text">{{ item.notes }}</p>
+              </div>
+
+              <div class="history-detail-list">
+                <div
+                  v-for="(herb, idx) in item.items || []"
+                  :key="`${item.id}-${idx}`"
+                  class="history-detail-card"
+                >
+                  <div class="history-detail-top">
+                    <div class="history-detail-left">
+                      <span class="sequence-badge history-sequence-badge">
+                        {{ getLiveSequenceCode(herb) || herb.sequenceCode }}
+                      </span>
+
+                      <div class="history-detail-text">
+                        <div class="history-herb-name-row">
+                          <span class="history-herb-name">
+                            {{ herb.herbName || herb.inputName }}
+                          </span>
+                          <span class="history-dose-pill">
+                            {{ getDisplayDoseForSavedHerb(herb) }}g
+                          </span>
+                        </div>
+
+                        <div class="history-meta-row">
+                          <span class="history-mini-pill">
+                            {{ normalizeCategoryName(getDisplayCategoryForSavedHerb(herb)) }}
+                          </span>
+                          <span v-if="getDisplayPinyinForSavedHerb(herb)" class="history-pinyin">
+                            {{ getDisplayPinyinForSavedHerb(herb) }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      v-if="getDisplayFunctionsForSavedHerb(herb)"
+                      class="toggle-detail-btn"
+                      @click="toggleSavedHerbDetail(item.id, idx)"
+                    >
+                      {{
+                        isSavedHerbDetailOpen(item.id, idx) ? 'Hide Functions' : 'Show Functions'
+                      }}
+                    </button>
+                  </div>
+
+                  <transition name="expand-fade">
+                    <div
+                      v-if="
+                        getDisplayFunctionsForSavedHerb(herb) && isSavedHerbDetailOpen(item.id, idx)
+                      "
+                      class="history-functions-panel"
+                    >
+                      <div class="history-functions-title">Functions</div>
+                      <div
+                        class="history-functions-content"
+                        v-html="formatMultilineText(getDisplayFunctionsForSavedHerb(herb))"
+                      ></div>
+                    </div>
+                  </transition>
+                </div>
+              </div>
+            </div>
+          </transition>
         </div>
       </div>
 
@@ -438,17 +505,10 @@ const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
 const DEFAULT_ROWS = 25
 const DEFAULT_GRAMS = '10'
-// Each spoon of granules weighs ~1.5g. This constant together with the three
-// admin-editable fields below drive the Target Total:
-//   Target Total = spoonsPerTime * GRAMS_PER_SPOON * timesPerDay * totalDays
-// Example: 4 spoons * 1.5g * 2 times * 7 days = 84g
 const GRAMS_PER_SPOON = 1.5
 const DEFAULT_SPOONS_PER_TIME = '4'
 const DEFAULT_TIMES_PER_DAY = '2'
 const DEFAULT_TOTAL_DAYS = '7'
-// Concentration ratio from the workbook (column B of HerbList). Every herb in
-// the source spreadsheet uses 5, so we keep it as a single constant. If you
-// ever store per-herb ratios, swap this out for a lookup.
 const GRANULE_RATIO = 5
 
 const herbs = ref([])
@@ -460,8 +520,9 @@ const editingId = ref('')
 const currentPage = ref(1)
 const searchKeyword = ref('')
 const searchField = ref('all')
+const savedHerbOpenMap = ref({})
+const prescriptionOpenMap = ref({})
 
-// Admin-editable dosing inputs. Target Total is derived from these.
 const spoonsPerTime = ref(DEFAULT_SPOONS_PER_TIME)
 const timesPerDay = ref(DEFAULT_TIMES_PER_DAY)
 const totalDays = ref(DEFAULT_TOTAL_DAYS)
@@ -490,6 +551,7 @@ function createEmptyRow(data = {}) {
     pinyin: data.pinyin || '',
     grams: data.grams || DEFAULT_GRAMS,
     pinyinEdited: Boolean(data.pinyinEdited),
+    gramsEdited: Boolean(data.gramsEdited),
   }
 }
 
@@ -557,6 +619,11 @@ function sanitizeGrams(value) {
   return clean || DEFAULT_GRAMS
 }
 
+function sanitizeDose(value) {
+  const clean = String(value || '').trim()
+  return clean || DEFAULT_GRAMS
+}
+
 function toNumber(value) {
   const num = Number(String(value || '').trim())
   return Number.isFinite(num) ? num : 0
@@ -585,6 +652,7 @@ function filterGramsInput(value) {
 function handleGramsInput(event, row) {
   const cleaned = filterGramsInput(event.target.value)
   row.grams = cleaned
+  row.gramsEdited = true
   event.target.value = cleaned
 }
 
@@ -592,9 +660,6 @@ function normalizeGramsOnBlur(row) {
   row.grams = sanitizeGrams(row.grams)
 }
 
-// Admins can type any decimal number in each of the three dosing fields. The
-// Target Total is derived from them, so there is no fallback here — empty
-// values are treated as 0 until save time.
 function handleSpoonsPerTimeInput(event) {
   const cleaned = filterDecimalInput(event.target.value)
   spoonsPerTime.value = cleaned
@@ -613,18 +678,6 @@ function handleTotalDaysInput(event) {
   event.target.value = cleaned
 }
 
-/**
- * Excel formula replicated here:
- *   J_i = C_i / E_i              (raw grams / granule ratio)
- *   F_i = (J_i / ΣJ) * Target    (distribute target proportionally)
- *
- * Because every herb in the source HerbList uses ratio = 5, E_i cancels out
- * and the scaling reduces to raw_i / Σraw * target. We still keep the ratio
- * in the code path so it is easy to switch to per-herb ratios later.
- *
- * The last valid row absorbs the rounding remainder so the scaled numbers
- * always add up exactly to `target`.
- */
 function scaleRowsToTarget(rows, targetValue) {
   const target = toNumber(targetValue)
 
@@ -633,8 +686,6 @@ function scaleRowsToTarget(rows, targetValue) {
   }
 
   const validRows = rows.filter((row) => row.name && toNumber(row.grams) > 0)
-
-  // Granule equivalents per day (J_i = C_i / ratio)
   const granuleEquivalents = validRows.map((row) => toNumber(row.grams) / GRANULE_RATIO)
   const dayTotal = granuleEquivalents.reduce((sum, val) => sum + val, 0)
 
@@ -692,6 +743,14 @@ function getHerbPinyin(herb) {
   ).trim()
 }
 
+function getHerbFunctions(herb) {
+  return String(herb?.functions || '').trim()
+}
+
+function getHerbDefaultDose(herb) {
+  return sanitizeDose(herb?.defaultDose || herb?.defaultGrams || DEFAULT_GRAMS)
+}
+
 function hasChinese(value) {
   return /[\u4e00-\u9fff]/.test(String(value || ''))
 }
@@ -718,6 +777,21 @@ function generatePinyinFromChinese(text) {
     console.error('generatePinyinFromChinese error:', error)
     return ''
   }
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function formatMultilineText(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return escapeHtml(text).replace(/\n/g, '<br />')
 }
 
 async function loadHerbs() {
@@ -814,6 +888,8 @@ const herbLookupList = computed(() => {
       ...item,
       sequenceCode: `${categoryMeta?.letter || ''}${Number(item.defaultOrder || 0)}`,
       herbPinyin: getHerbPinyin(item),
+      herbFunctions: getHerbFunctions(item),
+      herbDefaultDose: getHerbDefaultDose(item),
     }
   })
 })
@@ -884,24 +960,24 @@ function handleNameInput(row) {
   const currentName = String(row.name || '').trim()
   const matched = getMatchedHerb(currentName)
 
-  if (row.pinyinEdited) return
-
-  if (matched) {
-    const herbStoredPinyin = getHerbPinyin(matched)
-    row.pinyin = normalizeAutoPinyin(herbStoredPinyin || generatePinyinFromChinese(currentName))
-    return
+  if (!row.pinyinEdited) {
+    if (matched) {
+      const herbStoredPinyin = getHerbPinyin(matched)
+      row.pinyin = normalizeAutoPinyin(herbStoredPinyin || generatePinyinFromChinese(currentName))
+    } else {
+      row.pinyin = generatePinyinFromChinese(currentName)
+    }
   }
 
-  row.pinyin = generatePinyinFromChinese(currentName)
+  if (matched && !row.gramsEdited) {
+    row.grams = getHerbDefaultDose(matched)
+  }
 }
 
 function markPinyinAsManual(row) {
   row.pinyinEdited = true
 }
 
-// Preview is the final prescription the user would hand out. When a target
-// total is set we automatically apply the Excel formula; otherwise we simply
-// show the raw input values.
 const previewItems = computed(() => {
   const namedMatchedRows = inputRows.value
     .map((row) => ({ row, matched: getMatchedHerb(row.name) }))
@@ -926,7 +1002,6 @@ const previewItems = computed(() => {
       const j = rawGrams / GRANULE_RATIO
       const dayTotal = rawTotal / GRANULE_RATIO
       const isLast = index === namedMatchedRows.length - 1
-
       const scaled = isLast ? roundTo2(target - accumulated) : roundTo2((j / dayTotal) * target)
 
       if (!isLast) accumulated += scaled
@@ -940,9 +1015,6 @@ const previewItems = computed(() => {
       groupOrder: Number(matched.groupOrder || 0),
       defaultOrder: Number(matched.defaultOrder || 0),
       sequenceCode: matched.sequenceCode,
-      // Preserve the doctor's original prescribed grams so the Rx logic stays
-      // visible — raw grams act as relative proportions, `grams` is the
-      // final scaled dose for the granule dispensing.
       rawGrams: sanitizeGrams(row.grams),
       grams: displayGrams,
       pinyin: getResolvedRowPinyin(row, matched),
@@ -979,20 +1051,11 @@ const previewTotalGrams = computed(() => {
   return roundTo2(previewItems.value.reduce((sum, item) => sum + toNumber(item.grams), 0))
 })
 
-// Target Total is derived from the three dosing fields:
-//   Target Total = spoonsPerTime * GRAMS_PER_SPOON * timesPerDay * totalDays
-// Example: 4 * 1.5 * 2 * 7 = 84g
 const targetTotalNumber = computed(() => {
   const spoons = toNumber(spoonsPerTime.value)
   const times = toNumber(timesPerDay.value)
   const days = toNumber(totalDays.value)
   return roundTo2(spoons * GRAMS_PER_SPOON * times * days)
-})
-
-const previewStatusText = computed(() => {
-  if (targetTotalNumber.value <= 0) return 'Set target to scale'
-  if (!previewItems.value.length) return 'Awaiting herbs'
-  return previewTotalGrams.value === targetTotalNumber.value ? 'Scaled' : 'Needs target'
 })
 
 function addRow() {
@@ -1073,6 +1136,7 @@ async function savePrescription() {
         pinyin: normalizeAutoPinyin(row.pinyin),
         grams: sanitizeGrams(row.grams),
         pinyinEdited: Boolean(row.pinyinEdited),
+        gramsEdited: Boolean(row.gramsEdited),
       }))
       .filter((row) => row.name)
 
@@ -1098,17 +1162,11 @@ async function savePrescription() {
       return
     }
 
-    // Capture the doctor's raw prescribed grams before scaling so we can
-    // persist them alongside the final scaled grams.
     const rawGramsByKey = new Map(rawRows.map((row) => [row.key, sanitizeGrams(row.grams)]))
-
-    // Apply the Excel formula at save time.
     const rows = scaleRowsToTarget(rawRows, target)
 
     saving.value = true
 
-    // Reflect scaled values back into the form so what you see matches what
-    // gets persisted.
     inputRows.value = scaleRowsToTarget(
       inputRows.value.map((row) => ({
         ...row,
@@ -1133,6 +1191,8 @@ async function savePrescription() {
         pinyin: normalizeAutoPinyin(
           row.pinyin || matched.herbPinyin || generatePinyinFromChinese(row.name),
         ),
+        functions: getHerbFunctions(matched),
+        defaultDose: getHerbDefaultDose(matched),
         matched: true,
       }
     })
@@ -1180,10 +1240,9 @@ function editPrescription(item) {
           createEmptyRow({
             name: herb.herbName || herb.inputName || '',
             pinyin: herb.pinyin || '',
-            // Prefer the doctor's raw prescribed grams when we have them so
-            // editing a saved prescription still shows the original Rx.
-            grams: herb.rawGrams || herb.grams || DEFAULT_GRAMS,
+            grams: herb.rawGrams || herb.grams || herb.defaultDose || DEFAULT_GRAMS,
             pinyinEdited: Boolean(herb.pinyin),
+            gramsEdited: true,
           }),
         )
       : createDefaultRows()
@@ -1192,10 +1251,6 @@ function editPrescription(item) {
   notes.value = item.notes || ''
   editingId.value = item.id
 
-  // Legacy prescriptions may only have a raw `targetTotal` and no dosing
-  // breakdown. In that case, back-derive a best-guess by pinning times/day and
-  // days to the defaults and solving for spoons-per-time so the computed
-  // Target Total matches what was saved.
   if (item.spoonsPerTime || item.timesPerDay || item.totalDays) {
     spoonsPerTime.value = item.spoonsPerTime || DEFAULT_SPOONS_PER_TIME
     timesPerDay.value = item.timesPerDay || DEFAULT_TIMES_PER_DAY
@@ -1275,6 +1330,7 @@ function buildExportRowsFromPrescription(payload) {
     '颗粒克数(g)': `${item.grams || DEFAULT_GRAMS}g`,
     浓缩比: payload.granuleRatio || item.granuleRatio || String(GRANULE_RATIO),
     分类: normalizeCategoryName(item.category || ''),
+    Functions: item.functions || '',
     Notes: index === 0 ? notesText : '',
   }))
 }
@@ -1296,6 +1352,7 @@ function buildExportRowsForAllPrescriptions(list) {
         '颗粒克数(g)': '',
         浓缩比: '',
         分类: '',
+        Functions: '',
         Notes: '',
       })
     }
@@ -1327,9 +1384,13 @@ function exportCurrentPrescription() {
       title: previewDisplayTitle.value,
       notes: notes.value || '',
       targetTotal: String(targetTotalNumber.value),
-      items: previewItems.value.map((item) => ({
-        ...item,
-      })),
+      items: previewItems.value.map((item) => {
+        const live = getMatchedHerb(item.herbName)
+        return {
+          ...item,
+          functions: getHerbFunctions(live),
+        }
+      }),
     }
 
     const rows = buildExportRowsFromPrescription(payload)
@@ -1368,6 +1429,60 @@ function exportAllPrescriptions() {
   }
 }
 
+function getSavedHerbOpenKey(prescriptionId, herbIndex) {
+  return `${prescriptionId}__${herbIndex}`
+}
+
+function toggleSavedHerbDetail(prescriptionId, herbIndex) {
+  const key = getSavedHerbOpenKey(prescriptionId, herbIndex)
+  savedHerbOpenMap.value = {
+    ...savedHerbOpenMap.value,
+    [key]: !savedHerbOpenMap.value[key],
+  }
+}
+
+function isSavedHerbDetailOpen(prescriptionId, herbIndex) {
+  return Boolean(savedHerbOpenMap.value[getSavedHerbOpenKey(prescriptionId, herbIndex)])
+}
+
+function getPrescriptionOpenKey(prescriptionId) {
+  return String(prescriptionId || '')
+}
+
+function togglePrescriptionCard(prescriptionId) {
+  const key = getPrescriptionOpenKey(prescriptionId)
+  prescriptionOpenMap.value = {
+    ...prescriptionOpenMap.value,
+    [key]: !prescriptionOpenMap.value[key],
+  }
+}
+
+function isPrescriptionCardOpen(prescriptionId) {
+  const key = getPrescriptionOpenKey(prescriptionId)
+  return Boolean(prescriptionOpenMap.value[key])
+}
+
+function getDisplayFunctionsForSavedHerb(savedHerb) {
+  const live = getLiveHerbRecord(savedHerb)
+  return getHerbFunctions(live) || String(savedHerb?.functions || '').trim()
+}
+
+function getDisplayDoseForSavedHerb(savedHerb) {
+  return sanitizeDose(
+    savedHerb?.grams || savedHerb?.rawGrams || savedHerb?.defaultDose || DEFAULT_GRAMS,
+  )
+}
+
+function getDisplayPinyinForSavedHerb(savedHerb) {
+  const live = getLiveHerbRecord(savedHerb)
+  return getHerbPinyin(live) || String(savedHerb?.pinyin || '').trim()
+}
+
+function getDisplayCategoryForSavedHerb(savedHerb) {
+  const live = getLiveHerbRecord(savedHerb)
+  return live?.category || savedHerb?.category || ''
+}
+
 const filteredPrescriptions = computed(() => {
   const keyword = normalizeString(searchKeyword.value)
 
@@ -1382,9 +1497,10 @@ const filteredPrescriptions = computed(() => {
         .map((herb) => {
           const liveCode = getLiveSequenceCode(herb)
           const herbName = herb.herbName || herb.inputName || ''
-          const herbPinyin = herb.pinyin || ''
-          const herbDose = `${herb.grams || DEFAULT_GRAMS}g`
-          return `${liveCode} ${herbName} ${herbPinyin} ${herbDose}`
+          const herbPinyin = getDisplayPinyinForSavedHerb(herb)
+          const herbDose = `${getDisplayDoseForSavedHerb(herb)}g`
+          const herbFunctions = getDisplayFunctionsForSavedHerb(herb)
+          return `${liveCode} ${herbName} ${herbPinyin} ${herbDose} ${herbFunctions}`
         })
         .join(' '),
     )
@@ -1467,13 +1583,6 @@ function goToNextPage() {
   color: #173c2f;
 }
 
-.page-subtitle {
-  margin: 8px 0 0;
-  color: #6b7280;
-  font-size: 14px;
-  font-weight: 600;
-}
-
 .header-actions {
   display: flex;
   gap: 10px;
@@ -1534,13 +1643,6 @@ function goToNextPage() {
   color: #fff;
   font-size: 13px;
   font-weight: 800;
-}
-
-.ratio-info-note {
-  font-size: 12px;
-  color: #355447;
-  font-weight: 700;
-  opacity: 0.82;
 }
 
 .dosing-grid {
@@ -1610,7 +1712,9 @@ function goToNextPage() {
 .ghost-btn,
 .remove-btn,
 .danger-btn,
-.dialog-confirm-btn {
+.dialog-confirm-btn,
+.toggle-detail-btn,
+.collapse-prescription-btn {
   border-radius: 14px;
   height: 42px;
   padding: 0 16px;
@@ -1635,7 +1739,9 @@ function goToNextPage() {
 }
 
 .ghost-btn,
-.remove-btn {
+.remove-btn,
+.toggle-detail-btn,
+.collapse-prescription-btn {
   border: 1px solid #d9e1db;
   background: #ffffff;
   color: #355447;
@@ -1651,7 +1757,9 @@ function goToNextPage() {
 .ghost-btn:hover,
 .remove-btn:hover,
 .danger-btn:hover,
-.dialog-confirm-btn:hover {
+.dialog-confirm-btn:hover,
+.toggle-detail-btn:hover,
+.collapse-prescription-btn:hover {
   transform: translateY(-1px);
 }
 
@@ -1829,8 +1937,7 @@ function goToNextPage() {
 }
 
 .meta-pill,
-.sequence-badge,
-.history-tag {
+.sequence-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2007,7 +2114,7 @@ function goToNextPage() {
 
 .history-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
+  grid-template-columns: minmax(0, 1fr) 220px;
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -2020,9 +2127,9 @@ function goToNextPage() {
 
 .history-item {
   border: 1px solid #e7eeea;
-  border-radius: 18px;
+  border-radius: 24px;
   background: linear-gradient(180deg, #fbfcfb 0%, #f7faf8 100%);
-  padding: 16px;
+  padding: 18px;
 }
 
 .history-item-top {
@@ -2032,10 +2139,15 @@ function goToNextPage() {
   gap: 12px;
 }
 
+.history-item-title-wrap {
+  min-width: 0;
+}
+
 .history-item-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .history-title {
@@ -2051,24 +2163,43 @@ function goToNextPage() {
   font-weight: 700;
 }
 
-.history-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 14px;
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
 }
 
-.history-tag {
-  min-height: 32px;
-  padding: 0 12px;
-  background: #eef5f1;
-  color: #184c3b;
+.history-summary-box {
+  border: 1px solid #e7eeea;
+  background: #f8fbf9;
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-summary-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.history-summary-box strong {
+  color: #173c2f;
+  font-size: 18px;
+}
+
+.history-expand-body {
+  margin-top: 16px;
 }
 
 .history-notes {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
   background: #ffffff;
   border: 1px solid #edf2ef;
 }
@@ -2079,6 +2210,8 @@ function goToNextPage() {
   font-weight: 800;
   color: #6b7280;
   margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .history-notes-text {
@@ -2086,6 +2219,121 @@ function goToNextPage() {
   color: #355447;
   font-size: 14px;
   line-height: 1.6;
+}
+
+.history-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.history-detail-card {
+  border: 1px solid #dfe9e3;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 14px;
+}
+
+.history-detail-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.history-detail-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.history-sequence-badge {
+  flex-shrink: 0;
+}
+
+.history-detail-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-herb-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.history-herb-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: #173c2f;
+}
+
+.history-dose-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef5f1;
+  color: #184c3b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.history-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.history-mini-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f3f8f5;
+  color: #355447;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.history-pinyin {
+  font-size: 13px;
+  color: #355447;
+  font-weight: 700;
+}
+
+.history-functions-panel {
+  margin-top: 14px;
+  border-radius: 16px;
+  background: #f8fbf9;
+  border: 1px dashed #d9e8de;
+  padding: 14px 16px;
+}
+
+.history-functions-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #184c3b;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.history-functions-content {
+  color: #355447;
+  font-size: 14px;
+  line-height: 1.8;
+  word-break: break-word;
 }
 
 .pagination-bar {
@@ -2134,14 +2382,18 @@ function goToNextPage() {
 .toast-fade-enter-active,
 .toast-fade-leave-active,
 .dialog-fade-enter-active,
-.dialog-fade-leave-active {
+.dialog-fade-leave-active,
+.expand-fade-enter-active,
+.expand-fade-leave-active {
   transition: all 0.25s ease;
 }
 
 .toast-fade-enter-from,
 .toast-fade-leave-to,
 .dialog-fade-enter-from,
-.dialog-fade-leave-to {
+.dialog-fade-leave-to,
+.expand-fade-enter-from,
+.expand-fade-leave-to {
   opacity: 0;
   transform: translateY(10px);
 }
@@ -2244,10 +2496,20 @@ function goToNextPage() {
   .dosing-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .history-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-detail-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 520px) {
-  .dosing-grid {
+  .dosing-grid,
+  .history-summary-grid {
     grid-template-columns: 1fr;
   }
 }

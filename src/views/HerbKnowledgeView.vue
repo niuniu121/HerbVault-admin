@@ -11,7 +11,7 @@
         v-model.trim="searchKeyword"
         class="search-input"
         type="text"
-        placeholder="Search herb name / functions..."
+        placeholder="Search herb name / functions / default dose..."
       />
 
       <select v-model="selectedCategory" class="category-select">
@@ -63,12 +63,28 @@
 
                 <div class="knowledge-trigger-right">
                   <span class="meta-pill">{{ normalizeCategoryName(herb.category) }}</span>
+                  <span class="dose-pill">{{ herb.defaultDose }}g</span>
                   <span class="chevron" :class="{ open: isOpen(herb.id) }">▾</span>
                 </div>
               </button>
 
               <transition name="expand-fade">
                 <div v-if="isOpen(herb.id)" class="knowledge-panel">
+                  <div class="edit-grid">
+                    <div class="edit-block">
+                      <label class="field-label">Default Dose (g)</label>
+                      <input
+                        :value="herb.editDefaultDose"
+                        class="dose-input"
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="10"
+                        @input="handleDoseInput($event, herb)"
+                        @blur="normalizeDoseOnBlur(herb)"
+                      />
+                    </div>
+                  </div>
+
                   <label class="field-label">Functions</label>
 
                   <textarea
@@ -136,6 +152,7 @@ import { collection, doc, getDocs, serverTimestamp, updateDoc } from 'firebase/f
 import { db } from '../services/firebase'
 
 const HERBS = 'herbs'
+const DEFAULT_DOSE = '10'
 
 const loading = ref(true)
 const savingId = ref('')
@@ -218,6 +235,31 @@ function normalizeString(value) {
     .toLowerCase()
 }
 
+function filterDecimalInput(value) {
+  const raw = String(value || '')
+  let cleaned = raw.replace(/[^\d.]/g, '')
+  const parts = cleaned.split('.')
+  if (parts.length > 2) {
+    cleaned = `${parts[0]}.${parts.slice(1).join('')}`
+  }
+  return cleaned
+}
+
+function sanitizeDose(value) {
+  const cleaned = String(value || '').trim()
+  return cleaned || DEFAULT_DOSE
+}
+
+function handleDoseInput(event, herb) {
+  const cleaned = filterDecimalInput(event.target.value)
+  herb.editDefaultDose = cleaned
+  event.target.value = cleaned
+}
+
+function normalizeDoseOnBlur(herb) {
+  herb.editDefaultDose = sanitizeDose(herb.editDefaultDose)
+}
+
 function getAlphabetLabel(index) {
   let n = index + 1
   let result = ''
@@ -272,6 +314,7 @@ function toggleHerb(id) {
 
 function resetCurrentEdit(herb) {
   herb.editFunctions = herb.functions || ''
+  herb.editDefaultDose = sanitizeDose(herb.defaultDose)
   showToast('Reset complete')
 }
 
@@ -288,7 +331,7 @@ function confirmResetCurrentEdit(herb) {
 function confirmSaveKnowledge(herb) {
   openDialog({
     title: 'Save this herb?',
-    message: 'The current functions content will be saved.',
+    message: 'The current functions and default dose will be saved.',
     confirmText: 'Save',
     type: 'neutral',
     action: () => saveKnowledge(herb),
@@ -310,6 +353,8 @@ async function loadHerbs() {
         ...item,
         functions: String(item.functions || '').trim(),
         editFunctions: String(item.functions || '').trim(),
+        defaultDose: sanitizeDose(item.defaultDose || item.defaultGrams || DEFAULT_DOSE),
+        editDefaultDose: sanitizeDose(item.defaultDose || item.defaultGrams || DEFAULT_DOSE),
       }))
   } catch (error) {
     console.error('loadHerbs error:', error)
@@ -339,7 +384,8 @@ const filteredHerbs = computed(() => {
       !keyword ||
       normalizeString(h.nameCn).includes(keyword) ||
       normalizeString(h.editFunctions).includes(keyword) ||
-      normalizeString(h.functions).includes(keyword)
+      normalizeString(h.functions).includes(keyword) ||
+      normalizeString(h.defaultDose).includes(keyword)
 
     const matchCategory = selectedCategory.value === 'all' || h.category === selectedCategory.value
 
@@ -386,13 +432,17 @@ async function saveKnowledge(herb) {
 
     const payload = {
       functions: String(herb.editFunctions || '').trim(),
+      defaultDose: sanitizeDose(herb.editDefaultDose),
       updatedAt: serverTimestamp(),
     }
 
     await updateDoc(doc(db, HERBS, herb.id), payload)
-    herb.functions = payload.functions
 
-    showToast('Functions saved')
+    herb.functions = payload.functions
+    herb.defaultDose = payload.defaultDose
+    herb.editDefaultDose = payload.defaultDose
+
+    showToast('Functions and default dose saved')
   } catch (error) {
     console.error('saveKnowledge error:', error)
     showToast('Save failed', 'error')
@@ -428,12 +478,6 @@ async function saveKnowledge(herb) {
   color: #173c2f;
 }
 
-.page-subtitle {
-  margin: 10px 0 0;
-  color: #6b7280;
-  font-weight: 600;
-}
-
 .toolbar-card {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
@@ -442,7 +486,8 @@ async function saveKnowledge(herb) {
 }
 
 .search-input,
-.category-select {
+.category-select,
+.dose-input {
   width: 100%;
   height: 48px;
   border: 1px solid #d8dee7;
@@ -455,7 +500,9 @@ async function saveKnowledge(herb) {
 }
 
 .search-input:focus,
-.category-select:focus {
+.category-select:focus,
+.dose-input:focus,
+.function-textarea:focus {
   border-color: #1c5b47;
   box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
 }
@@ -605,18 +652,27 @@ async function saveKnowledge(herb) {
   flex-shrink: 0;
 }
 
-.meta-pill {
+.meta-pill,
+.dose-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 30px;
   padding: 0 12px;
   border-radius: 999px;
-  background: #eef5f1;
-  color: #184c3b;
   font-size: 12px;
   font-weight: 800;
   box-sizing: border-box;
+}
+
+.meta-pill {
+  background: #eef5f1;
+  color: #184c3b;
+}
+
+.dose-pill {
+  background: #f7efe4;
+  color: #8b5e1a;
 }
 
 .chevron {
@@ -643,6 +699,19 @@ async function saveKnowledge(herb) {
   overflow: hidden;
 }
 
+.edit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 240px);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.edit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .field-label {
   display: block;
   margin-bottom: 10px;
@@ -666,39 +735,6 @@ async function saveKnowledge(herb) {
   color: #1f2937;
   box-sizing: border-box;
   max-width: 100%;
-}
-
-.function-textarea:focus {
-  border-color: #1c5b47;
-  box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
-}
-
-.preview-block {
-  margin-top: 14px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: #f8fbf9;
-  border: 1px dashed #d7e7dd;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-}
-
-.preview-label {
-  font-size: 12px;
-  font-weight: 800;
-  color: #184c3b;
-  margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.preview-content {
-  font-size: 14px;
-  line-height: 1.8;
-  color: #374151;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 .panel-actions {
@@ -821,60 +857,48 @@ async function saveKnowledge(herb) {
 .dialog-icon {
   width: 52px;
   height: 52px;
-  border-radius: 16px;
+  margin: 0 auto 14px;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 14px;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 900;
-}
-
-.dialog-icon.neutral {
   background: #eef5f1;
   color: #184c3b;
 }
 
-.dialog-icon.danger {
-  background: #fff1f2;
-  color: #dc2626;
-}
-
 .dialog-title {
-  margin: 0;
-  font-size: 20px;
+  margin: 0 0 8px;
   color: #173c2f;
+  font-size: 20px;
+  font-weight: 800;
 }
 
 .dialog-message {
-  margin: 10px 0 0;
+  margin: 0;
   color: #6b7280;
-  line-height: 1.6;
-  font-size: 14px;
+  line-height: 1.7;
 }
 
 .dialog-actions {
-  margin-top: 18px;
   display: flex;
   justify-content: center;
   gap: 10px;
+  margin-top: 18px;
   flex-wrap: wrap;
 }
 
-.dialog-btn {
-  min-width: 100px;
-}
-
 .dialog-confirm-btn.neutral {
+  border: none;
   background: #184c3b;
   color: #fff;
-  border: none;
 }
 
 .dialog-confirm-btn.danger {
+  border: none;
   background: #dc2626;
   color: #fff;
-  border: none;
 }
 
 @media (max-width: 900px) {
@@ -888,15 +912,16 @@ async function saveKnowledge(herb) {
   }
 
   .knowledge-trigger-right {
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .knowledge-panel {
     padding-left: 0;
   }
 
-  .function-preview {
-    max-width: 100%;
+  .edit-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
