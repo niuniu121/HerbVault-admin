@@ -184,6 +184,19 @@
                 <span class="meta-text">Waiting for input</span>
               </template>
             </div>
+
+            <transition name="expand-fade">
+              <div
+                v-if="row.name && getMatchedHerb(row.name) && getInputRowFunctions(row)"
+                class="input-functions-panel"
+              >
+                <div class="input-functions-title">Functions</div>
+                <div
+                  class="input-functions-content"
+                  v-html="formatMultilineText(getInputRowFunctions(row))"
+                ></div>
+              </div>
+            </transition>
           </div>
         </div>
 
@@ -954,6 +967,11 @@ function buildMetaDisplay(herb, row) {
   const doseText = `${sanitizeGrams(row?.grams)}g`
   const pinyinText = getResolvedRowPinyin(row, herb)
   return pinyinText ? `${category} · ${pinyinText} · ${doseText}` : `${category} · ${doseText}`
+}
+
+function getInputRowFunctions(row) {
+  const matched = getMatchedHerb(row?.name)
+  return getHerbFunctions(matched)
 }
 
 function handleNameInput(row) {
@@ -1971,6 +1989,30 @@ function goToNextPage() {
   color: #6b7280;
   font-size: 13px;
   font-weight: 700;
+}
+
+.input-functions-panel {
+  margin-top: 14px;
+  border-radius: 16px;
+  background: #f8fbf9;
+  border: 1px dashed #d9e8de;
+  padding: 14px 16px;
+}
+
+.input-functions-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #184c3b;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.input-functions-content {
+  color: #355447;
+  font-size: 14px;
+  line-height: 1.8;
+  word-break: break-word;
 }
 
 .notes-area {
