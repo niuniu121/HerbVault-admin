@@ -119,13 +119,13 @@
                   ></textarea>
 
                   <div class="panel-actions">
-                    <button
+                    <!-- <button
                       class="ghost-btn"
                       :disabled="savingId === herb.id"
                       @click="confirmResetCurrentEdit(herb)"
                     >
                       Reset
-                    </button>
+                    </button> -->
 
                     <button
                       class="save-btn"
