@@ -44,6 +44,11 @@
           <span class="ratio-info-label">Granule Ratio</span>
           <span class="ratio-info-value">{{ GRANULE_RATIO }}</span>
         </div>
+
+        <div class="ratio-info-left">
+          <span class="ratio-info-label">Estimated Price</span>
+          <span class="ratio-info-value">AUD {{ formatMoney(previewTotalPrice) }}</span>
+        </div>
       </div>
 
       <div class="dosing-grid">
@@ -170,6 +175,9 @@
                 <span class="meta-text">
                   {{ buildMetaDisplay(getMatchedHerb(row.name), row) }}
                 </span>
+                <span class="price-meta-pill">
+                  AUD {{ formatMoney(getMatchedHerb(row.name).herbUnitPrice) }}/g
+                </span>
               </template>
 
               <template v-else-if="row.name">
@@ -191,10 +199,15 @@
                 class="input-functions-panel"
               >
                 <div class="input-functions-title">Functions</div>
-                <div
-                  class="input-functions-content"
-                  v-html="formatMultilineText(getInputRowFunctions(row))"
-                ></div>
+                <div class="function-tags">
+                  <span
+                    v-for="(line, lineIndex) in splitFunctionLines(getInputRowFunctions(row))"
+                    :key="lineIndex"
+                    class="function-tag"
+                  >
+                    {{ line }}
+                  </span>
+                </div>
               </div>
             </transition>
           </div>
@@ -229,6 +242,10 @@
             <span class="preview-title-label">Target Total</span>
             <strong>{{ targetTotalNumber }}g</strong>
           </div>
+          <div class="preview-title-line price-line">
+            <span class="preview-title-label">Estimated Price</span>
+            <strong>AUD{{ formatMoney(previewTotalPrice) }}</strong>
+          </div>
         </div>
 
         <div v-if="previewItems.length" class="preview-list">
@@ -247,6 +264,15 @@
                 <div class="preview-category">
                   {{ normalizeCategoryName(item.category) }}
                 </div>
+
+                <div class="preview-price-row">
+                  <span>AUD {{ formatMoney(item.unitPrice) }}/g</span>
+                  <span>×</span>
+                  <span>{{ item.grams }}g</span>
+                  <span>=</span>
+                  <strong>AUD{{ formatMoney(item.itemTotal) }}</strong>
+                </div>
+
                 <div class="preview-raw" v-if="item.rawGrams !== item.grams">
                   <span class="preview-raw-label">Rx</span>
                   <span class="preview-raw-value">{{ item.rawGrams }}g</span>
@@ -291,6 +317,10 @@
             <span>Target Total</span>
             <strong>{{ targetTotalNumber }}g</strong>
           </div>
+          <div class="summary-row total-price-row">
+            <span>Total Price</span>
+            <strong>AUD {{ formatMoney(previewTotalPrice) }}</strong>
+          </div>
         </div>
       </div>
     </section>
@@ -318,7 +348,7 @@
           v-model.trim="searchKeyword"
           class="search-input"
           type="text"
-          placeholder="Search by prescription name, herb, pinyin, functions, notes, or date..."
+          placeholder="Search by prescription name, herb, pinyin, functions, notes, price, or date..."
         />
 
         <select v-model="searchField" class="filter-select">
@@ -327,6 +357,7 @@
           <option value="herb">Herb / Pinyin / Functions</option>
           <option value="date">Date / Time</option>
           <option value="notes">Notes</option>
+          <option value="price">Price</option>
         </select>
       </div>
 
@@ -360,8 +391,8 @@
               <strong>{{ item.targetTotal || '-' }}g</strong>
             </div>
             <div class="history-summary-box">
-              <span class="history-summary-label">Granule Ratio</span>
-              <strong>{{ item.granuleRatio || GRANULE_RATIO }}</strong>
+              <span class="history-summary-label">Total Price</span>
+              <strong>AUD{{ formatMoney(getPrescriptionTotalPrice(item)) }}</strong>
             </div>
             <div class="history-summary-box">
               <span class="history-summary-label">Times / Day</span>
@@ -400,6 +431,9 @@
                           <span class="history-dose-pill">
                             {{ getDisplayDoseForSavedHerb(herb) }}g
                           </span>
+                          <span class="history-price-pill">
+                            AUD{{ formatMoney(getDisplayItemTotalForSavedHerb(herb)) }}
+                          </span>
                         </div>
 
                         <div class="history-meta-row">
@@ -409,6 +443,13 @@
                           <span v-if="getDisplayPinyinForSavedHerb(herb)" class="history-pinyin">
                             {{ getDisplayPinyinForSavedHerb(herb) }}
                           </span>
+                        </div>
+
+                        <div class="history-price-formula">
+                          AUD{{ formatMoney(getDisplayUnitPriceForSavedHerb(herb)) }}/g ×
+                          {{ getDisplayDoseForSavedHerb(herb) }}g = AUD{{
+                            formatMoney(getDisplayItemTotalForSavedHerb(herb))
+                          }}
                         </div>
                       </div>
                     </div>
@@ -432,10 +473,17 @@
                       class="history-functions-panel"
                     >
                       <div class="history-functions-title">Functions</div>
-                      <div
-                        class="history-functions-content"
-                        v-html="formatMultilineText(getDisplayFunctionsForSavedHerb(herb))"
-                      ></div>
+                      <div class="function-tags">
+                        <span
+                          v-for="(line, lineIndex) in splitFunctionLines(
+                            getDisplayFunctionsForSavedHerb(herb),
+                          )"
+                          :key="lineIndex"
+                          class="function-tag"
+                        >
+                          {{ line }}
+                        </span>
+                      </div>
                     </div>
                   </transition>
                 </div>
@@ -518,6 +566,7 @@ const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
 const DEFAULT_ROWS = 25
 const DEFAULT_GRAMS = '10'
+const DEFAULT_UNIT_PRICE = '0'
 const GRAMS_PER_SPOON = 1.5
 const DEFAULT_SPOONS_PER_TIME = '4'
 const DEFAULT_TIMES_PER_DAY = '2'
@@ -637,13 +686,36 @@ function sanitizeDose(value) {
   return clean || DEFAULT_GRAMS
 }
 
+function sanitizeUnitPrice(value) {
+  const clean = String(value || '').trim()
+  return clean || DEFAULT_UNIT_PRICE
+}
+
 function toNumber(value) {
   const num = Number(String(value || '').trim())
   return Number.isFinite(num) ? num : 0
 }
 
 function roundTo2(num) {
-  return Math.round(num * 100) / 100
+  return Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100
+}
+
+function formatMoney(value) {
+  const number = Number(value || 0)
+  if (!Number.isFinite(number)) return '0.00'
+  return number.toFixed(2)
+}
+
+function calculateItemTotal(grams, unitPrice) {
+  return roundTo2(toNumber(grams) * toNumber(unitPrice))
+}
+
+function calculatePrescriptionTotal(items = []) {
+  return roundTo2(
+    items.reduce((sum, item) => {
+      return sum + calculateItemTotal(item.grams, item.unitPrice)
+    }, 0),
+  )
 }
 
 function filterDecimalInput(value) {
@@ -764,6 +836,10 @@ function getHerbDefaultDose(herb) {
   return sanitizeDose(herb?.defaultDose || herb?.defaultGrams || DEFAULT_GRAMS)
 }
 
+function getHerbUnitPrice(herb) {
+  return sanitizeUnitPrice(herb?.unitPrice || herb?.pricePerGram || DEFAULT_UNIT_PRICE)
+}
+
 function hasChinese(value) {
   return /[\u4e00-\u9fff]/.test(String(value || ''))
 }
@@ -805,6 +881,13 @@ function formatMultilineText(value) {
   const text = String(value || '').trim()
   if (!text) return ''
   return escapeHtml(text).replace(/\n/g, '<br />')
+}
+
+function splitFunctionLines(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 async function loadHerbs() {
@@ -903,6 +986,7 @@ const herbLookupList = computed(() => {
       herbPinyin: getHerbPinyin(item),
       herbFunctions: getHerbFunctions(item),
       herbDefaultDose: getHerbDefaultDose(item),
+      herbUnitPrice: getHerbUnitPrice(item),
     }
   })
 })
@@ -1026,6 +1110,9 @@ const previewItems = computed(() => {
       displayGrams = String(scaled)
     }
 
+    const unitPrice = getHerbUnitPrice(matched)
+    const itemTotal = calculateItemTotal(displayGrams, unitPrice)
+
     return {
       herbId: matched.id,
       herbName: matched.nameCn,
@@ -1036,6 +1123,8 @@ const previewItems = computed(() => {
       rawGrams: sanitizeGrams(row.grams),
       grams: displayGrams,
       pinyin: getResolvedRowPinyin(row, matched),
+      unitPrice,
+      itemTotal: String(itemTotal),
       matched: true,
     }
   })
@@ -1067,6 +1156,10 @@ const rawInputTotalGrams = computed(() => {
 
 const previewTotalGrams = computed(() => {
   return roundTo2(previewItems.value.reduce((sum, item) => sum + toNumber(item.grams), 0))
+})
+
+const previewTotalPrice = computed(() => {
+  return calculatePrescriptionTotal(previewItems.value)
 })
 
 const targetTotalNumber = computed(() => {
@@ -1195,6 +1288,9 @@ async function savePrescription() {
 
     const items = rows.map((row) => {
       const matched = getMatchedHerb(row.name)
+      const unitPrice = getHerbUnitPrice(matched)
+      const itemTotal = calculateItemTotal(row.grams, unitPrice)
+
       return {
         inputName: row.name,
         herbId: matched.id,
@@ -1211,9 +1307,13 @@ async function savePrescription() {
         ),
         functions: getHerbFunctions(matched),
         defaultDose: getHerbDefaultDose(matched),
+        unitPrice,
+        itemTotal: String(itemTotal),
         matched: true,
       }
     })
+
+    const totalPrice = calculatePrescriptionTotal(items)
 
     const payload = {
       title: prescriptionTitle.value || '',
@@ -1224,6 +1324,7 @@ async function savePrescription() {
       totalDays: String(toNumber(totalDays.value)),
       gramsPerSpoon: String(GRAMS_PER_SPOON),
       granuleRatio: String(GRANULE_RATIO),
+      totalPrice: String(totalPrice),
       items,
       createdBy: getOperator(),
       updatedAt: serverTimestamp(),
@@ -1338,6 +1439,7 @@ function formatDate(value) {
 function buildExportRowsFromPrescription(payload) {
   const titleText = payload.title || 'Untitled Prescription'
   const notesText = payload.notes || ''
+  const totalPriceText = formatMoney(getPrescriptionTotalPrice(payload))
 
   return (payload.items || []).map((item, index) => ({
     处方名: index === 0 ? titleText : '',
@@ -1347,6 +1449,9 @@ function buildExportRowsFromPrescription(payload) {
     '医生原方(g)': item.rawGrams ? `${item.rawGrams}g` : '',
     '颗粒克数(g)': `${item.grams || DEFAULT_GRAMS}g`,
     浓缩比: payload.granuleRatio || item.granuleRatio || String(GRANULE_RATIO),
+    '单价(AUD/g)': formatMoney(getDisplayUnitPriceForSavedHerb(item)),
+    '单味金额(AUD)': formatMoney(getDisplayItemTotalForSavedHerb(item)),
+    '处方总价(AUD)': index === 0 ? totalPriceText : '',
     分类: normalizeCategoryName(item.category || ''),
     Functions: item.functions || '',
     Notes: index === 0 ? notesText : '',
@@ -1369,6 +1474,9 @@ function buildExportRowsForAllPrescriptions(list) {
         '医生原方(g)': '',
         '颗粒克数(g)': '',
         浓缩比: '',
+        '单价(AUD/g)': '',
+        '单味金额(AUD)': '',
+        '处方总价(AUD)': '',
         分类: '',
         Functions: '',
         Notes: '',
@@ -1402,6 +1510,8 @@ function exportCurrentPrescription() {
       title: previewDisplayTitle.value,
       notes: notes.value || '',
       targetTotal: String(targetTotalNumber.value),
+      granuleRatio: String(GRANULE_RATIO),
+      totalPrice: String(previewTotalPrice.value),
       items: previewItems.value.map((item) => {
         const live = getMatchedHerb(item.herbName)
         return {
@@ -1501,6 +1611,38 @@ function getDisplayCategoryForSavedHerb(savedHerb) {
   return live?.category || savedHerb?.category || ''
 }
 
+function getDisplayUnitPriceForSavedHerb(savedHerb) {
+  const live = getLiveHerbRecord(savedHerb)
+  return sanitizeUnitPrice(savedHerb?.unitPrice || live?.herbUnitPrice || getHerbUnitPrice(live))
+}
+
+function getDisplayItemTotalForSavedHerb(savedHerb) {
+  if (savedHerb?.itemTotal !== undefined && savedHerb?.itemTotal !== null) {
+    return sanitizeUnitPrice(savedHerb.itemTotal)
+  }
+
+  return String(
+    calculateItemTotal(
+      getDisplayDoseForSavedHerb(savedHerb),
+      getDisplayUnitPriceForSavedHerb(savedHerb),
+    ),
+  )
+}
+
+function getPrescriptionTotalPrice(prescription) {
+  if (prescription?.totalPrice !== undefined && prescription?.totalPrice !== null) {
+    return sanitizeUnitPrice(prescription.totalPrice)
+  }
+
+  return String(
+    roundTo2(
+      (prescription?.items || []).reduce((sum, item) => {
+        return sum + toNumber(getDisplayItemTotalForSavedHerb(item))
+      }, 0),
+    ),
+  )
+}
+
 const filteredPrescriptions = computed(() => {
   const keyword = normalizeString(searchKeyword.value)
 
@@ -1510,6 +1652,8 @@ const filteredPrescriptions = computed(() => {
     const dateText = normalizeString(formatDate(item.createdAt))
     const notesText = normalizeString(item.notes)
     const titleText = normalizeString(item.title)
+    const priceText = normalizeString(getPrescriptionTotalPrice(item))
+
     const herbText = normalizeString(
       (item.items || [])
         .map((herb) => {
@@ -1518,7 +1662,9 @@ const filteredPrescriptions = computed(() => {
           const herbPinyin = getDisplayPinyinForSavedHerb(herb)
           const herbDose = `${getDisplayDoseForSavedHerb(herb)}g`
           const herbFunctions = getDisplayFunctionsForSavedHerb(herb)
-          return `${liveCode} ${herbName} ${herbPinyin} ${herbDose} ${herbFunctions}`
+          const unitPrice = getDisplayUnitPriceForSavedHerb(herb)
+          const itemTotal = getDisplayItemTotalForSavedHerb(herb)
+          return `${liveCode} ${herbName} ${herbPinyin} ${herbDose} ${herbFunctions} ${unitPrice} ${itemTotal}`
         })
         .join(' '),
     )
@@ -1539,11 +1685,16 @@ const filteredPrescriptions = computed(() => {
       return herbText.includes(keyword)
     }
 
+    if (searchField.value === 'price') {
+      return priceText.includes(keyword) || herbText.includes(keyword)
+    }
+
     return (
       titleText.includes(keyword) ||
       dateText.includes(keyword) ||
       notesText.includes(keyword) ||
-      herbText.includes(keyword)
+      herbText.includes(keyword) ||
+      priceText.includes(keyword)
     )
   })
 })
@@ -1645,7 +1796,7 @@ function goToNextPage() {
 .ratio-info-label {
   font-size: 12px;
   font-weight: 800;
-  color: #355447;
+  color: #184c3b;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -1991,12 +2142,24 @@ function goToNextPage() {
   font-weight: 700;
 }
 
+.price-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #d68ba226;
+  color: #184c3b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .input-functions-panel {
   margin-top: 14px;
-  border-radius: 16px;
-  background: #f8fbf9;
-  border: 1px dashed #d9e8de;
-  padding: 14px 16px;
+  border: none;
+  background: transparent;
+  padding: 0;
 }
 
 .input-functions-title {
@@ -2008,11 +2171,27 @@ function goToNextPage() {
   letter-spacing: 0.03em;
 }
 
-.input-functions-content {
-  color: #355447;
-  font-size: 14px;
-  line-height: 1.8;
+.function-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.function-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #eef5f1;
+  color: #184c3b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
   word-break: break-word;
+  white-space: normal;
 }
 
 .notes-area {
@@ -2050,6 +2229,10 @@ function goToNextPage() {
 .preview-title-label {
   font-weight: 700;
   color: #6b7280;
+}
+
+.price-line strong {
+  color: #355447;
 }
 
 .preview-list {
@@ -2097,6 +2280,20 @@ function goToNextPage() {
   font-size: 13px;
   color: #6b7280;
   font-weight: 700;
+}
+
+.preview-price-row {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #d68ba226;
+  color: #355447;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .preview-raw {
@@ -2152,6 +2349,16 @@ function goToNextPage() {
   color: #355447;
   font-size: 14px;
   font-weight: 700;
+}
+
+.total-price-row {
+  padding-top: 10px;
+  border-top: 1px dashed #d9e1db;
+}
+
+.total-price-row strong {
+  color: #d68ba2;
+  font-size: 18px;
 }
 
 .history-toolbar {
@@ -2314,17 +2521,26 @@ function goToNextPage() {
   color: #173c2f;
 }
 
-.history-dose-pill {
+.history-dose-pill,
+.history-price-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  background: #eef5f1;
-  color: #184c3b;
   font-size: 12px;
   font-weight: 800;
+}
+
+.history-dose-pill {
+  background: #eef5f1;
+  color: #184c3b;
+}
+
+.history-price-pill {
+  background: #f4ecff;
+  color: #d68ba2;
 }
 
 .history-meta-row {
@@ -2354,12 +2570,25 @@ function goToNextPage() {
   font-weight: 700;
 }
 
+.history-price-formula {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #f4ecff;
+  color: #d68ba2;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .history-functions-panel {
   margin-top: 14px;
-  border-radius: 16px;
-  background: #f8fbf9;
-  border: 1px dashed #d9e8de;
-  padding: 14px 16px;
+  border: none;
+  background: transparent;
+  padding: 0;
 }
 
 .history-functions-title {
@@ -2369,13 +2598,6 @@ function goToNextPage() {
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-}
-
-.history-functions-content {
-  color: #355447;
-  font-size: 14px;
-  line-height: 1.8;
-  word-break: break-word;
 }
 
 .pagination-bar {
@@ -2568,15 +2790,6 @@ function goToNextPage() {
 
   .page-header-card h2 {
     font-size: 28px;
-  }
-
-  .history-item-top {
-    flex-direction: column;
-  }
-
-  .history-top-right {
-    width: 100%;
-    justify-content: space-between;
   }
 }
 </style>

@@ -11,7 +11,7 @@
         v-model.trim="searchKeyword"
         class="search-input"
         type="text"
-        placeholder="Search herb name / functions / default dose..."
+        placeholder="Search herb name / functions / default dose / unit price..."
       />
 
       <select v-model="selectedCategory" class="category-select">
@@ -45,6 +45,7 @@
                   <div class="title-stack">
                     <div class="title-line">
                       <h4>{{ herb.nameCn }}</h4>
+
                       <span
                         v-if="getSingleLineFunctionPreview(herb.functions)"
                         class="function-preview"
@@ -64,6 +65,7 @@
                 <div class="knowledge-trigger-right">
                   <span class="meta-pill">{{ normalizeCategoryName(herb.category) }}</span>
                   <span class="dose-pill">{{ herb.defaultDose }}g</span>
+                  <span class="price-pill">AUD {{ formatMoney(herb.unitPrice) }}/g</span>
                   <span class="chevron" :class="{ open: isOpen(herb.id) }">▾</span>
                 </div>
               </button>
@@ -71,6 +73,16 @@
               <transition name="expand-fade">
                 <div v-if="isOpen(herb.id)" class="knowledge-panel">
                   <div class="edit-grid">
+                    <div class="edit-block herb-name-block">
+                      <label class="field-label">Herb Name</label>
+                      <input
+                        v-model.trim="herb.editNameCn"
+                        class="text-input"
+                        type="text"
+                        placeholder="Enter herb name"
+                      />
+                    </div>
+
                     <div class="edit-block">
                       <label class="field-label">Default Dose (g)</label>
                       <input
@@ -81,6 +93,19 @@
                         placeholder="10"
                         @input="handleDoseInput($event, herb)"
                         @blur="normalizeDoseOnBlur(herb)"
+                      />
+                    </div>
+
+                    <div class="edit-block">
+                      <label class="field-label">Unit Price (AUD/g)</label>
+                      <input
+                        :value="herb.editUnitPrice"
+                        class="price-input"
+                        type="text"
+                        inputmode="decimal"
+                        placeholder="0.00"
+                        @input="handlePriceInput($event, herb)"
+                        @blur="normalizePriceOnBlur(herb)"
                       />
                     </div>
                   </div>
@@ -94,6 +119,14 @@
                   ></textarea>
 
                   <div class="panel-actions">
+                    <button
+                      class="ghost-btn"
+                      :disabled="savingId === herb.id"
+                      @click="confirmResetCurrentEdit(herb)"
+                    >
+                      Reset
+                    </button>
+
                     <button
                       class="save-btn"
                       :disabled="savingId === herb.id"
@@ -153,6 +186,7 @@ import { db } from '../services/firebase'
 
 const HERBS = 'herbs'
 const DEFAULT_DOSE = '10'
+const DEFAULT_UNIT_PRICE = '0'
 
 const loading = ref(true)
 const savingId = ref('')
@@ -239,15 +273,26 @@ function filterDecimalInput(value) {
   const raw = String(value || '')
   let cleaned = raw.replace(/[^\d.]/g, '')
   const parts = cleaned.split('.')
+
   if (parts.length > 2) {
     cleaned = `${parts[0]}.${parts.slice(1).join('')}`
   }
+
   return cleaned
 }
 
 function sanitizeDose(value) {
   const cleaned = String(value || '').trim()
   return cleaned || DEFAULT_DOSE
+}
+
+function sanitizeUnitPrice(value) {
+  const cleaned = String(value || '').trim()
+  return cleaned || DEFAULT_UNIT_PRICE
+}
+
+function sanitizeHerbName(value) {
+  return String(value || '').trim()
 }
 
 function handleDoseInput(event, herb) {
@@ -258,6 +303,22 @@ function handleDoseInput(event, herb) {
 
 function normalizeDoseOnBlur(herb) {
   herb.editDefaultDose = sanitizeDose(herb.editDefaultDose)
+}
+
+function handlePriceInput(event, herb) {
+  const cleaned = filterDecimalInput(event.target.value)
+  herb.editUnitPrice = cleaned
+  event.target.value = cleaned
+}
+
+function normalizePriceOnBlur(herb) {
+  herb.editUnitPrice = sanitizeUnitPrice(herb.editUnitPrice)
+}
+
+function formatMoney(value) {
+  const number = Number(value || 0)
+  if (Number.isNaN(number)) return '0.00'
+  return number.toFixed(2)
 }
 
 function getAlphabetLabel(index) {
@@ -313,8 +374,10 @@ function toggleHerb(id) {
 }
 
 function resetCurrentEdit(herb) {
+  herb.editNameCn = herb.nameCn || ''
   herb.editFunctions = herb.functions || ''
   herb.editDefaultDose = sanitizeDose(herb.defaultDose)
+  herb.editUnitPrice = sanitizeUnitPrice(herb.unitPrice)
   showToast('Reset complete')
 }
 
@@ -329,9 +392,16 @@ function confirmResetCurrentEdit(herb) {
 }
 
 function confirmSaveKnowledge(herb) {
+  const nextName = sanitizeHerbName(herb.editNameCn)
+
+  if (!nextName) {
+    showToast('Herb name cannot be empty', 'error')
+    return
+  }
+
   openDialog({
     title: 'Save this herb?',
-    message: 'The current functions and default dose will be saved.',
+    message: 'The herb name, functions, default dose and unit price will be saved.',
     confirmText: 'Save',
     type: 'neutral',
     action: () => saveKnowledge(herb),
@@ -340,6 +410,7 @@ function confirmSaveKnowledge(herb) {
 
 async function loadHerbs() {
   loading.value = true
+
   try {
     const snap = await getDocs(collection(db, HERBS))
 
@@ -351,10 +422,17 @@ async function loadHerbs() {
       .filter((item) => isRealHerb(item))
       .map((item) => ({
         ...item,
+        nameCn: sanitizeHerbName(item.nameCn),
+        editNameCn: sanitizeHerbName(item.nameCn),
+
         functions: String(item.functions || '').trim(),
         editFunctions: String(item.functions || '').trim(),
+
         defaultDose: sanitizeDose(item.defaultDose || item.defaultGrams || DEFAULT_DOSE),
         editDefaultDose: sanitizeDose(item.defaultDose || item.defaultGrams || DEFAULT_DOSE),
+
+        unitPrice: sanitizeUnitPrice(item.unitPrice || item.pricePerGram || DEFAULT_UNIT_PRICE),
+        editUnitPrice: sanitizeUnitPrice(item.unitPrice || item.pricePerGram || DEFAULT_UNIT_PRICE),
       }))
   } catch (error) {
     console.error('loadHerbs error:', error)
@@ -383,9 +461,11 @@ const filteredHerbs = computed(() => {
     const matchKeyword =
       !keyword ||
       normalizeString(h.nameCn).includes(keyword) ||
+      normalizeString(h.editNameCn).includes(keyword) ||
       normalizeString(h.editFunctions).includes(keyword) ||
       normalizeString(h.functions).includes(keyword) ||
-      normalizeString(h.defaultDose).includes(keyword)
+      normalizeString(h.defaultDose).includes(keyword) ||
+      normalizeString(h.unitPrice).includes(keyword)
 
     const matchCategory = selectedCategory.value === 'all' || h.category === selectedCategory.value
 
@@ -412,6 +492,7 @@ const groupedHerbs = computed(() => {
           herbs: [],
         })
       }
+
       map.get(h.category).herbs.push(h)
     })
 
@@ -427,22 +508,39 @@ const groupedHerbs = computed(() => {
 })
 
 async function saveKnowledge(herb) {
+  const nextName = sanitizeHerbName(herb.editNameCn)
+
+  if (!nextName) {
+    showToast('Herb name cannot be empty', 'error')
+    return
+  }
+
   try {
     savingId.value = herb.id
 
     const payload = {
+      nameCn: nextName,
       functions: String(herb.editFunctions || '').trim(),
       defaultDose: sanitizeDose(herb.editDefaultDose),
+      unitPrice: sanitizeUnitPrice(herb.editUnitPrice),
       updatedAt: serverTimestamp(),
     }
 
     await updateDoc(doc(db, HERBS, herb.id), payload)
 
+    herb.nameCn = payload.nameCn
+    herb.editNameCn = payload.nameCn
+
     herb.functions = payload.functions
+    herb.editFunctions = payload.functions
+
     herb.defaultDose = payload.defaultDose
     herb.editDefaultDose = payload.defaultDose
 
-    showToast('Functions and default dose saved')
+    herb.unitPrice = payload.unitPrice
+    herb.editUnitPrice = payload.unitPrice
+
+    showToast('Herb name, functions, default dose and unit price saved')
   } catch (error) {
     console.error('saveKnowledge error:', error)
     showToast('Save failed', 'error')
@@ -487,7 +585,9 @@ async function saveKnowledge(herb) {
 
 .search-input,
 .category-select,
-.dose-input {
+.text-input,
+.dose-input,
+.price-input {
   width: 100%;
   height: 48px;
   border: 1px solid #d8dee7;
@@ -501,7 +601,9 @@ async function saveKnowledge(herb) {
 
 .search-input:focus,
 .category-select:focus,
+.text-input:focus,
 .dose-input:focus,
+.price-input:focus,
 .function-textarea:focus {
   border-color: #1c5b47;
   box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
@@ -650,10 +752,12 @@ async function saveKnowledge(herb) {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .meta-pill,
-.dose-pill {
+.dose-pill,
+.price-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -673,6 +777,11 @@ async function saveKnowledge(herb) {
 .dose-pill {
   background: #f7efe4;
   color: #8b5e1a;
+}
+
+.price-pill {
+  background: #d68ba226;
+  color: #184c3b;
 }
 
 .chevron {
@@ -701,15 +810,20 @@ async function saveKnowledge(herb) {
 
 .edit-grid {
   display: grid;
-  grid-template-columns: minmax(0, 240px);
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px) minmax(160px, 220px);
   gap: 14px;
   margin-bottom: 14px;
+  align-items: end;
 }
 
 .edit-block {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.herb-name-block {
+  min-width: 0;
 }
 
 .field-label {
@@ -901,6 +1015,16 @@ async function saveKnowledge(herb) {
   color: #fff;
 }
 
+@media (max-width: 1100px) {
+  .edit-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .herb-name-block {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
   .toolbar-card {
     grid-template-columns: 1fr;
@@ -922,6 +1046,10 @@ async function saveKnowledge(herb) {
 
   .edit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .herb-name-block {
+    grid-column: auto;
   }
 }
 </style>
