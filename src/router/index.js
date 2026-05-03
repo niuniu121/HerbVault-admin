@@ -8,6 +8,7 @@ import SettingsView from '../views/SettingsView.vue'
 import PrescriptionView from '../views/PrescriptionView.vue'
 import HerbKnowledgeView from '../views/HerbKnowledgeView.vue'
 import IssuedPrescriptionsView from '../views/IssuedPrescriptionsView.vue'
+import OurValuesView from '../views/OurValuesView.vue'
 
 const routes = [
   {
@@ -56,7 +57,12 @@ const routes = [
         path: '/issued-prescriptions',
         name: 'IssuedPrescriptions',
         component: IssuedPrescriptionsView,
-      }
+      },
+      {
+        path: '/values',
+        name: 'OurValuesView',
+        component: OurValuesView,
+      },
     ],
   },
 ]

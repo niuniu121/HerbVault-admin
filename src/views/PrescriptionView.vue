@@ -676,6 +676,74 @@ function normalizeString(value) {
     .toLowerCase()
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function normalizePinyinSearchText(value) {
+  return normalizeSearchText(value).replace(/[^a-z0-9]/g, '')
+}
+
+function getPinyinInitials(value) {
+  return normalizeSearchText(value)
+    .split(' ')
+    .map((part) => part.charAt(0))
+    .join('')
+}
+
+function buildHerbSearchTokens(herb) {
+  const nameCn = normalizeSearchText(herb?.nameCn)
+  const nameEn = normalizeSearchText(herb?.nameEn || herb?.englishName)
+  const storedPinyin = normalizeAutoPinyin(getHerbPinyin(herb))
+  const generatedPinyin = generatePinyinFromChinese(herb?.nameCn)
+  const pinyinText = normalizeAutoPinyin(storedPinyin || generatedPinyin)
+  const pinyinCompact = normalizePinyinSearchText(pinyinText)
+  const pinyinInitials = getPinyinInitials(pinyinText)
+
+  return {
+    nameCn,
+    nameEn,
+    pinyinText,
+    pinyinCompact,
+    pinyinInitials,
+  }
+}
+
+function getHerbMatchScore(herb, inputValue) {
+  const keyword = normalizeSearchText(inputValue)
+  const compactKeyword = normalizePinyinSearchText(inputValue)
+
+  if (!keyword && !compactKeyword) return 0
+
+  const tokens = buildHerbSearchTokens(herb)
+
+  if (tokens.nameCn && tokens.nameCn === keyword) return 100
+  if (tokens.pinyinText && tokens.pinyinText === keyword) return 95
+  if (tokens.pinyinCompact && tokens.pinyinCompact === compactKeyword) return 94
+  if (tokens.nameEn && tokens.nameEn === keyword) return 90
+
+  if (tokens.nameCn && tokens.nameCn.startsWith(keyword)) return 82
+  if (tokens.pinyinText && tokens.pinyinText.startsWith(keyword)) return 80
+  if (tokens.pinyinCompact && compactKeyword && tokens.pinyinCompact.startsWith(compactKeyword))
+    return 78
+  if (tokens.pinyinInitials && compactKeyword && tokens.pinyinInitials.startsWith(compactKeyword))
+    return 75
+  if (tokens.nameEn && tokens.nameEn.startsWith(keyword)) return 72
+
+  if (tokens.nameCn && tokens.nameCn.includes(keyword)) return 62
+  if (tokens.pinyinText && tokens.pinyinText.includes(keyword)) return 60
+  if (tokens.pinyinCompact && compactKeyword && tokens.pinyinCompact.includes(compactKeyword))
+    return 58
+  if (tokens.pinyinInitials && compactKeyword && tokens.pinyinInitials.includes(compactKeyword))
+    return 55
+  if (tokens.nameEn && tokens.nameEn.includes(keyword)) return 50
+
+  return 0
+}
+
 function sanitizeGrams(value) {
   const clean = String(value || '').trim()
   return clean || DEFAULT_GRAMS
@@ -995,7 +1063,20 @@ const herbLookupMap = computed(() => {
   const map = new Map()
 
   herbLookupList.value.forEach((item) => {
-    map.set(normalizeString(item.nameCn), item)
+    const tokens = buildHerbSearchTokens(item)
+    const aliases = [
+      tokens.nameCn,
+      tokens.nameEn,
+      tokens.pinyinText,
+      tokens.pinyinCompact,
+      tokens.pinyinInitials,
+    ].filter(Boolean)
+
+    aliases.forEach((alias) => {
+      if (!map.has(alias)) {
+        map.set(alias, item)
+      }
+    })
   })
 
   return map
@@ -1014,9 +1095,26 @@ const herbIdLookupMap = computed(() => {
 })
 
 function getMatchedHerb(inputName) {
-  const key = normalizeString(inputName)
-  if (!key) return null
-  return herbLookupMap.value.get(key) || null
+  const keyword = normalizeSearchText(inputName)
+  const compactKeyword = normalizePinyinSearchText(inputName)
+
+  if (!keyword && !compactKeyword) return null
+
+  const directMatch = herbLookupMap.value.get(keyword) || herbLookupMap.value.get(compactKeyword)
+  if (directMatch) return directMatch
+
+  let bestMatch = null
+  let bestScore = 0
+
+  herbLookupList.value.forEach((herb) => {
+    const score = getHerbMatchScore(herb, inputName)
+    if (score > bestScore) {
+      bestScore = score
+      bestMatch = herb
+    }
+  })
+
+  return bestScore >= 50 ? bestMatch : null
 }
 
 function getLiveHerbRecord(savedHerb) {
@@ -1027,10 +1125,9 @@ function getLiveHerbRecord(savedHerb) {
     return herbIdLookupMap.value.get(herbId)
   }
 
-  const herbName = normalizeString(savedHerb.herbName || savedHerb.inputName)
-  if (herbName && herbLookupMap.value.has(herbName)) {
-    return herbLookupMap.value.get(herbName)
-  }
+  const herbName = savedHerb.herbName || savedHerb.inputName || savedHerb.pinyin
+  const matched = getMatchedHerb(herbName)
+  if (matched) return matched
 
   return null
 }
