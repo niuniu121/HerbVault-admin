@@ -6,6 +6,20 @@
       </div>
 
       <div class="header-actions">
+        <input
+          ref="prescriptionFileInput"
+          class="file-input-hidden"
+          type="file"
+          accept=".pdf,.txt,application/pdf,text/plain"
+          @change="handlePrescriptionFileChange"
+        />
+        <button
+          class="ghost-btn import-btn"
+          :disabled="importingPrescription"
+          @click="openPrescriptionFilePicker"
+        >
+          {{ importingPrescription ? 'Reading Prescription...' : 'Import Prescription' }}
+        </button>
         <button class="ghost-btn" @click="addRow">Add Row</button>
         <button class="ghost-btn" @click="confirmResetRows">Reset 25 Rows</button>
         <button class="ghost-btn" @click="clearAll">Clear</button>
@@ -24,6 +38,44 @@
           }}
         </button>
       </div>
+    </section>
+
+    <section
+      v-if="importingPrescription || importSummary.fileName"
+      class="import-summary-card card"
+      :class="{ 'has-unmatched': importSummary.unmatched.length > 0 }"
+    >
+      <div class="import-summary-main">
+        <div class="import-summary-icon">{{ importingPrescription ? '...' : 'Rx' }}</div>
+
+        <div class="import-summary-content">
+          <div class="import-summary-title">
+            {{ importingPrescription ? 'Reading prescription' : importSummary.fileName }}
+          </div>
+
+          <div v-if="!importingPrescription" class="import-summary-stats">
+            <span>{{ importSummary.total }} herbs imported</span>
+            <span>{{ importSummary.matched }} matched</span>
+            <span v-if="importSummary.prescriptionDate">
+              {{ importSummary.prescriptionDate }}
+            </span>
+          </div>
+
+          <div
+            v-if="!importingPrescription && importSummary.unmatched.length"
+            class="import-unmatched-wrap"
+          >
+            <span class="import-unmatched-label">Review:</span>
+            <span v-for="name in importSummary.unmatched" :key="name" class="import-unmatched-pill">
+              {{ name }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <button v-if="!importingPrescription" class="ghost-btn small-btn" @click="clearImportSummary">
+        Dismiss
+      </button>
     </section>
 
     <section class="top-form-card card">
@@ -548,6 +600,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import { pinyin as toPinyin } from 'pinyin-pro'
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { auth, db } from '../services/firebase'
 import {
   addDoc,
@@ -561,6 +615,8 @@ import {
   updateDoc,
 } from 'firebase/firestore'
 
+GlobalWorkerOptions.workerSrc = pdfWorker
+
 const HERBS = 'herbs'
 const PRESCRIPTIONS = 'prescriptions'
 const PAGE_SIZE = 10
@@ -573,6 +629,17 @@ const DEFAULT_TIMES_PER_DAY = '2'
 const DEFAULT_TOTAL_DAYS = '7'
 const GRANULE_RATIO = 5
 
+const IMPORT_HERB_ALIASES = {
+  双花: ['金银花'],
+  杭菊花: ['菊花'],
+  辛夷花: ['辛夷'],
+  醋龟板: ['龟板'],
+  醋鳖甲: ['鳖甲'],
+  炙远志: ['远志'],
+  杏仁: ['苦杏仁'],
+  黄耆: ['黄芪'],
+}
+
 const herbs = ref([])
 const prescriptions = ref([])
 const saving = ref(false)
@@ -584,6 +651,15 @@ const searchKeyword = ref('')
 const searchField = ref('all')
 const savedHerbOpenMap = ref({})
 const prescriptionOpenMap = ref({})
+const prescriptionFileInput = ref(null)
+const importingPrescription = ref(false)
+const importSummary = ref({
+  fileName: '',
+  total: 0,
+  matched: 0,
+  unmatched: [],
+  prescriptionDate: '',
+})
 
 const spoonsPerTime = ref(DEFAULT_SPOONS_PER_TIME)
 const timesPerDay = ref(DEFAULT_TIMES_PER_DAY)
@@ -958,6 +1034,365 @@ function splitFunctionLines(value) {
     .filter(Boolean)
 }
 
+function openPrescriptionFilePicker() {
+  prescriptionFileInput.value?.click()
+}
+
+function clearImportSummary() {
+  importSummary.value = {
+    fileName: '',
+    total: 0,
+    matched: 0,
+    unmatched: [],
+    prescriptionDate: '',
+  }
+}
+
+function joinPdfLineItems(items = []) {
+  let result = ''
+
+  items.forEach((item) => {
+    const token = String(item?.str || '')
+    if (!token) return
+
+    if (!result) {
+      result = token
+      return
+    }
+
+    const previousChar = result.slice(-1)
+    const nextChar = token.charAt(0)
+    const previousIsChinese = /[\u3400-\u9fff]/.test(previousChar)
+    const nextIsChinese = /[\u3400-\u9fff]/.test(nextChar)
+    const noSpaceBefore = /^[,.;:!?，。；：、)\]}]/.test(token)
+    const noSpaceAfter = /[(\[{]$/.test(result)
+
+    if (noSpaceBefore || noSpaceAfter || previousIsChinese || nextIsChinese) {
+      result += token
+    } else {
+      result += ` ${token}`
+    }
+  })
+
+  return result.trim()
+}
+
+function buildPdfPageText(rawItems = []) {
+  const items = rawItems
+    .filter((item) => String(item?.str || '').trim())
+    .map((item) => ({
+      str: String(item.str || ''),
+      x: Number(item?.transform?.[4] || 0),
+      y: Number(item?.transform?.[5] || 0),
+    }))
+    .sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 2.5) return b.y - a.y
+      return a.x - b.x
+    })
+
+  const lines = []
+
+  items.forEach((item) => {
+    const currentLine = lines[lines.length - 1]
+
+    if (!currentLine || Math.abs(currentLine.y - item.y) > 2.5) {
+      lines.push({ y: item.y, items: [item] })
+      return
+    }
+
+    currentLine.items.push(item)
+  })
+
+  return lines
+    .map((line) => joinPdfLineItems(line.items.sort((a, b) => a.x - b.x)))
+    .filter(Boolean)
+    .join('\n')
+}
+
+async function extractTextFromPdf(file) {
+  const data = await file.arrayBuffer()
+  const loadingTask = getDocument({ data })
+  const pdf = await loadingTask.promise
+  const pageTexts = []
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber)
+    const textContent = await page.getTextContent()
+    pageTexts.push(buildPdfPageText(textContent.items))
+  }
+
+  return pageTexts.join('\n\n').trim()
+}
+
+function normalizeImportedPrescriptionText(value) {
+  return String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[，﹐､]/g, ',')
+    .replace(/[；﹔]/g, ';')
+    .replace(/[：﹕]/g, ':')
+    .replace(/[＿_]{2,}/g, ' ')
+    .replace(/([\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '$1')
+    .replace(/([\u3400-\u9fff])\s+(?=\d)/g, '$1')
+    .replace(/(\d)\s+(?=[,;。])/g, '$1')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function extractPrescriptionHerbBlock(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const startMarker = /Chinese Herbal Medicine Prescription\s*\(in grams\)\s*:\s*Granule Herbs/i
+  const startMatch = startMarker.exec(normalized)
+
+  if (startMatch) {
+    const afterStart = normalized.slice(startMatch.index + startMatch[0].length)
+    return afterStart.split(/For\s+No\.?\s+of\s+days\s*:/i)[0].trim()
+  }
+
+  const dayMarkerIndex = normalized.search(/For\s+No\.?\s+of\s+days\s*:/i)
+  return dayMarkerIndex >= 0 ? normalized.slice(0, dayMarkerIndex).trim() : normalized
+}
+
+function parseImportedHerbItems(text) {
+  const herbBlock = extractPrescriptionHerbBlock(text).replace(/\n/g, '').replace(/\s+/g, '')
+  const items = []
+  const pairPattern = /([\u3400-\u9fff]{1,16})(\d+(?:\.\d+)?)\s*(?:g|克)?(?=\s*[,;。]|$)/g
+  let match
+
+  while ((match = pairPattern.exec(herbBlock))) {
+    const name = String(match[1] || '').trim()
+    const grams = String(match[2] || '').trim()
+
+    if (name && toNumber(grams) > 0) {
+      items.push({ name, grams })
+    }
+  }
+
+  return items
+}
+
+function parseImportedPatientName(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const lineMatch = normalized.match(/^\s*RE\s*:\s*([^\n]+)/im)
+  if (!lineMatch) return ''
+
+  return String(lineMatch[1] || '')
+    .replace(/\s+\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}.*$/i, '')
+    .trim()
+}
+
+function parseImportedPrescriptionDate(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const match = normalized.match(/Date\s+of\s+prescription\s*:\s*([^\n]+)/i)
+  return String(match?.[1] || '').trim()
+}
+
+function parseImportedDays(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const match = normalized.match(/For\s+No\.?\s+of\s+days\s*:\s*(\d+(?:\.\d+)?)/i)
+  return String(match?.[1] || '').trim()
+}
+
+function parseImportedTimesPerDay(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const numericMatch = normalized.match(
+    /(?:consume|take).*?(\d+(?:\.\d+)?)\s*times?\s*(?:a|per)?\s*day/i,
+  )
+  if (numericMatch) return String(numericMatch[1])
+
+  const wordMatch = normalized.match(/(?:consume|take).*?\b(once|twice|thrice)\s+daily\b/i)
+  const wordMap = {
+    once: '1',
+    twice: '2',
+    thrice: '3',
+  }
+
+  return wordMatch ? wordMap[String(wordMatch[1]).toLowerCase()] || '' : ''
+}
+
+function parseImportedSpoonsPerTime(text) {
+  const normalized = normalizeImportedPrescriptionText(text)
+  const match = normalized.match(/Measure\s+(\d+(?:\.\d+)?)\s+spoons?/i)
+  return String(match?.[1] || '').trim()
+}
+
+function parsePrescriptionText(text, fallbackTitle = '') {
+  const items = parseImportedHerbItems(text)
+  const patientName = parseImportedPatientName(text)
+  const prescriptionDate = parseImportedPrescriptionDate(text)
+  const days = parseImportedDays(text)
+  const parsedTimesPerDay = parseImportedTimesPerDay(text)
+  const parsedSpoonsPerTime = parseImportedSpoonsPerTime(text)
+
+  return {
+    items,
+    title: patientName || fallbackTitle,
+    prescriptionDate,
+    days,
+    timesPerDay: parsedTimesPerDay,
+    spoonsPerTime: parsedSpoonsPerTime,
+  }
+}
+
+function getExactHerbByName(name) {
+  const normalizedName = normalizeSearchText(name)
+  if (!normalizedName) return null
+
+  return (
+    herbLookupList.value.find((herb) => normalizeSearchText(herb?.nameCn) === normalizedName) ||
+    null
+  )
+}
+
+function getImportedHerbCandidates(name) {
+  const cleanName = String(name || '')
+    .replace(/[\s,;，；。]/g, '')
+    .trim()
+  const aliases = IMPORT_HERB_ALIASES[cleanName] || []
+  return [...new Set([cleanName, ...aliases].filter(Boolean))]
+}
+
+function resolveImportedHerb(name) {
+  const candidates = getImportedHerbCandidates(name)
+
+  for (const candidate of candidates) {
+    const exactMatch = getExactHerbByName(candidate)
+    if (exactMatch) {
+      return {
+        originalName: name,
+        rowName: exactMatch.nameCn,
+        matched: exactMatch,
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    const fuzzyMatch = getMatchedHerb(candidate)
+    if (fuzzyMatch) {
+      return {
+        originalName: name,
+        rowName: fuzzyMatch.nameCn,
+        matched: fuzzyMatch,
+      }
+    }
+  }
+
+  return {
+    originalName: name,
+    rowName: String(name || '').trim(),
+    matched: null,
+  }
+}
+
+function applyImportedPrescription(parsed, fileName) {
+  const resolvedItems = parsed.items.map((item) => {
+    const resolved = resolveImportedHerb(item.name)
+    return {
+      ...item,
+      ...resolved,
+    }
+  })
+
+  const importedRows = resolvedItems.map((item) =>
+    createEmptyRow({
+      name: item.rowName,
+      pinyin: item.matched
+        ? normalizeAutoPinyin(
+            getHerbPinyin(item.matched) || generatePinyinFromChinese(item.matched.nameCn),
+          )
+        : generatePinyinFromChinese(item.rowName),
+      grams: String(item.grams),
+      pinyinEdited: false,
+      gramsEdited: true,
+    }),
+  )
+
+  while (importedRows.length < DEFAULT_ROWS) {
+    importedRows.push(createEmptyRow())
+  }
+
+  inputRows.value = importedRows
+  editingId.value = ''
+
+  if (parsed.title) {
+    prescriptionTitle.value = parsed.title
+  }
+
+  if (parsed.days && toNumber(parsed.days) > 0) {
+    totalDays.value = parsed.days
+  }
+
+  if (parsed.timesPerDay && toNumber(parsed.timesPerDay) > 0) {
+    timesPerDay.value = parsed.timesPerDay
+  }
+
+  if (parsed.spoonsPerTime && toNumber(parsed.spoonsPerTime) > 0) {
+    spoonsPerTime.value = parsed.spoonsPerTime
+  }
+
+  const unmatched = resolvedItems.filter((item) => !item.matched).map((item) => item.originalName)
+
+  importSummary.value = {
+    fileName,
+    total: resolvedItems.length,
+    matched: resolvedItems.length - unmatched.length,
+    unmatched,
+    prescriptionDate: parsed.prescriptionDate || '',
+  }
+
+  showToast(
+    `Imported ${resolvedItems.length} herbs${unmatched.length ? ` · ${unmatched.length} to review` : ''}`,
+  )
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+async function handlePrescriptionFileChange(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+
+  importingPrescription.value = true
+
+  try {
+    if (!herbs.value.length) {
+      await loadHerbs()
+    }
+
+    const lowerName = String(file.name || '').toLowerCase()
+    let extractedText = ''
+
+    if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
+      extractedText = await extractTextFromPdf(file)
+    } else if (file.type === 'text/plain' || lowerName.endsWith('.txt')) {
+      extractedText = await file.text()
+    } else {
+      throw new Error('Only PDF and TXT prescription files are supported.')
+    }
+
+    if (!String(extractedText || '').trim()) {
+      throw new Error(
+        'No selectable text was found in this file. Please use a text-based or OCR PDF.',
+      )
+    }
+
+    const fallbackTitle = String(file.name || 'Prescription').replace(/\.[^.]+$/, '')
+    const parsed = parsePrescriptionText(extractedText, fallbackTitle)
+
+    if (!parsed.items.length) {
+      throw new Error('No herb names and doses were found in this prescription.')
+    }
+
+    applyImportedPrescription(parsed, file.name)
+  } catch (error) {
+    console.error('handlePrescriptionFileChange error:', error)
+    clearImportSummary()
+    showToast(error?.message || 'Failed to import prescription', 'error')
+  } finally {
+    importingPrescription.value = false
+    event.target.value = ''
+  }
+}
+
 async function loadHerbs() {
   const snap = await getDocs(collection(db, HERBS))
   herbs.value = snap.docs.map((d) => ({
@@ -1236,7 +1671,7 @@ const previewDisplayTitle = computed(() => {
 })
 
 const previewNowText = computed(() => {
-  return new Date().toLocaleString()
+  return importSummary.value.prescriptionDate || new Date().toLocaleString()
 })
 
 const canExportCurrent = computed(() => {
@@ -1308,6 +1743,7 @@ function resetToDefaultRows() {
 }
 
 function clearAll() {
+  clearImportSummary()
   inputRows.value = createDefaultRows()
   notes.value = ''
   prescriptionTitle.value = ''
@@ -1450,6 +1886,7 @@ async function savePrescription() {
 }
 
 function editPrescription(item) {
+  clearImportSummary()
   inputRows.value =
     (item.items || []).length > 0
       ? item.items.map((herb) =>
@@ -1847,6 +2284,101 @@ function goToNextPage() {
   font-size: 34px;
   font-weight: 800;
   color: #173c2f;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.import-btn {
+  border-color: #b8d7c7;
+  background: #f4fbf7;
+  color: #184c3b;
+}
+
+.import-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  border-color: #d9eee1;
+  background: #f8fcfa;
+}
+
+.import-summary-card.has-unmatched {
+  border-color: #f4d39b;
+  background: #fffaf0;
+}
+
+.import-summary-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.import-summary-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: #184c3b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.import-summary-content {
+  min-width: 0;
+}
+
+.import-summary-title {
+  color: #173c2f;
+  font-weight: 800;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.import-summary-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 6px;
+  color: #647067;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.import-unmatched-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.import-unmatched-label {
+  color: #9a5b10;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.import-unmatched-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #fff3d9;
+  border: 1px solid #f4d39b;
+  color: #9a5b10;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .header-actions {
@@ -2876,6 +3408,11 @@ function goToNextPage() {
 }
 
 @media (max-width: 640px) {
+  .import-summary-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .page-header-card {
     flex-direction: column;
     align-items: stretch;
