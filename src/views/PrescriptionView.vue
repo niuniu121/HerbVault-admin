@@ -168,6 +168,42 @@
           <button class="ghost-btn small-btn" @click="cancelEdit">Cancel Edit</button>
         </div>
 
+        <div class="paste-import-card">
+          <div class="paste-import-head">
+            <div>
+              <div class="paste-import-title">Herbs</div>
+            </div>
+            <!-- <span class="paste-import-badge">
+              {{ pastedPrescriptionText.trim() ? 'Ready' : 'Optional' }}
+            </span> -->
+          </div>
+
+          <textarea
+            v-model="pastedPrescriptionText"
+            class="paste-import-textarea"
+            placeholder=""
+            @keydown.ctrl.enter.prevent="importPastedPrescription"
+            @keydown.meta.enter.prevent="importPastedPrescription"
+          ></textarea>
+
+          <div class="paste-import-actions">
+            <button
+              class="primary-btn small-btn"
+              :disabled="importingPrescription || !pastedPrescriptionText.trim()"
+              @click="importPastedPrescription"
+            >
+              Import Herbs
+            </button>
+            <button
+              class="ghost-btn small-btn"
+              :disabled="!pastedPrescriptionText.trim()"
+              @click="clearPastedPrescriptionText"
+            >
+              Clear Paste
+            </button>
+          </div>
+        </div>
+
         <div class="input-list">
           <div v-for="(row, index) in inputRows" :key="row.key" class="input-row-card">
             <div class="row-top">
@@ -267,11 +303,7 @@
 
         <div class="notes-area">
           <label>Notes</label>
-          <textarea
-            v-model.trim="notes"
-            class="notes-input"
-            placeholder="Optional notes for dispensing..."
-          ></textarea>
+          <textarea v-model.trim="notes" class="notes-input" placeholder=""></textarea>
         </div>
       </div>
 
@@ -660,6 +692,7 @@ const importSummary = ref({
   unmatched: [],
   prescriptionDate: '',
 })
+const pastedPrescriptionText = ref('')
 
 const spoonsPerTime = ref(DEFAULT_SPOONS_PER_TIME)
 const timesPerDay = ref(DEFAULT_TIMES_PER_DAY)
@@ -1065,7 +1098,7 @@ function joinPdfLineItems(items = []) {
     const previousIsChinese = /[\u3400-\u9fff]/.test(previousChar)
     const nextIsChinese = /[\u3400-\u9fff]/.test(nextChar)
     const noSpaceBefore = /^[,.;:!?，。；：、)\]}]/.test(token)
-    const noSpaceAfter = /[(\[{]$/.test(result)
+    const noSpaceAfter = /[([{]$/.test(result)
 
     if (noSpaceBefore || noSpaceAfter || previousIsChinese || nextIsChinese) {
       result += token
@@ -1154,14 +1187,61 @@ function extractPrescriptionHerbBlock(text) {
   return dayMarkerIndex >= 0 ? normalized.slice(0, dayMarkerIndex).trim() : normalized
 }
 
-function parseImportedHerbItems(text) {
-  const herbBlock = extractPrescriptionHerbBlock(text).replace(/\n/g, '').replace(/\s+/g, '')
+function getKnownImportedHerbNames() {
+  const names = []
+
+  herbLookupList.value.forEach((herb) => {
+    if (herb?.nameCn) names.push(String(herb.nameCn).trim())
+  })
+
+  Object.entries(IMPORT_HERB_ALIASES).forEach(([alias, targets]) => {
+    names.push(alias)
+    ;(targets || []).forEach((target) => names.push(target))
+  })
+
+  return [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length)
+}
+
+function normalizeImportedHerbNameToken(value) {
+  return String(value || '')
+    .replace(/^[\s,;，；、。:：+＋/|｜-]+/, '')
+    .replace(/[\s,;，；、。:：+＋/|｜-]+$/, '')
+    .replace(/^药名[:：]?/i, '')
+    .replace(/^herb\s*name[:：]?/i, '')
+    .replace(/\d+(?:\.\d+)?\s*(?:g|G|克)?/g, '')
+    .trim()
+}
+
+function dedupeImportedItems(items = []) {
+  const result = []
+  const seen = new Set()
+
+  items.forEach((item) => {
+    const name = normalizeImportedHerbNameToken(item?.name)
+    const grams = sanitizeGrams(item?.grams || DEFAULT_GRAMS)
+    const key = `${name}__${grams}`
+
+    if (!name || seen.has(key)) return
+
+    seen.add(key)
+    result.push({ name, grams })
+  })
+
+  return result
+}
+
+function parseImportedHerbDosePairs(text) {
+  const herbBlock = extractPrescriptionHerbBlock(text)
+  const compactBlock = normalizeImportedPrescriptionText(herbBlock)
+    .replace(/\n/g, '')
+    .replace(/\s+/g, '')
   const items = []
-  const pairPattern = /([\u3400-\u9fff]{1,16})(\d+(?:\.\d+)?)\s*(?:g|克)?(?=\s*[,;。]|$)/g
+  const pairPattern =
+    /([\u3400-\u9fff]{1,20})(\d+(?:\.\d+)?)\s*(?:g|G|克)?(?=$|[\s,;，；、。]|[\u3400-\u9fff])/g
   let match
 
-  while ((match = pairPattern.exec(herbBlock))) {
-    const name = String(match[1] || '').trim()
+  while ((match = pairPattern.exec(compactBlock))) {
+    const name = normalizeImportedHerbNameToken(match[1])
     const grams = String(match[2] || '').trim()
 
     if (name && toNumber(grams) > 0) {
@@ -1169,7 +1249,87 @@ function parseImportedHerbItems(text) {
     }
   }
 
-  return items
+  return dedupeImportedItems(items)
+}
+
+function findKnownHerbNamesInText(text) {
+  const source = String(text || '').replace(/\s+/g, '')
+  if (!source) return []
+
+  const knownNames = getKnownImportedHerbNames()
+  const matches = []
+
+  knownNames.forEach((name) => {
+    let start = 0
+    let index = source.indexOf(name, start)
+
+    while (index >= 0) {
+      matches.push({ name, index, end: index + name.length })
+      start = index + Math.max(name.length, 1)
+      index = source.indexOf(name, start)
+    }
+  })
+
+  matches.sort((a, b) => {
+    if (a.index !== b.index) return a.index - b.index
+    return b.name.length - a.name.length
+  })
+
+  const selected = []
+  const occupied = []
+
+  matches.forEach((match) => {
+    const overlaps = occupied.some((range) => match.index < range.end && match.end > range.index)
+    if (overlaps) return
+
+    selected.push(match)
+    occupied.push({ index: match.index, end: match.end })
+  })
+
+  return selected.sort((a, b) => a.index - b.index).map((item) => item.name)
+}
+
+function parseLooseImportedHerbItems(text) {
+  const herbBlock = extractPrescriptionHerbBlock(text)
+  const normalized = normalizeImportedPrescriptionText(herbBlock)
+  const items = []
+  const splitParts = normalized
+    .replace(/\d+(?:\.\d+)?\s*(?:g|G|克)/g, ' ')
+    .split(/[\n,;，；、。+＋/|｜]+/)
+    .map((part) => normalizeImportedHerbNameToken(part))
+    .filter(Boolean)
+
+  splitParts.forEach((part) => {
+    const directMatch = getMatchedHerb(part)
+
+    if (directMatch || /^[\u3400-\u9fff]{1,12}$/.test(part)) {
+      items.push({ name: directMatch?.nameCn || part, grams: DEFAULT_GRAMS })
+      return
+    }
+
+    const knownNames = findKnownHerbNamesInText(part)
+    knownNames.forEach((name) => {
+      items.push({ name, grams: DEFAULT_GRAMS })
+    })
+  })
+
+  if (!items.length) {
+    findKnownHerbNamesInText(normalized).forEach((name) => {
+      items.push({ name, grams: DEFAULT_GRAMS })
+    })
+  }
+
+  return dedupeImportedItems(items)
+}
+
+function parseImportedHerbItems(text) {
+  const doseItems = parseImportedHerbDosePairs(text)
+
+  if (doseItems.length) {
+    return doseItems
+  }
+
+  return parseLooseImportedHerbItems(text)
 }
 
 function parseImportedPatientName(text) {
@@ -1390,6 +1550,42 @@ async function handlePrescriptionFileChange(event) {
   } finally {
     importingPrescription.value = false
     event.target.value = ''
+  }
+}
+
+function clearPastedPrescriptionText() {
+  pastedPrescriptionText.value = ''
+}
+
+async function importPastedPrescription() {
+  const pastedText = String(pastedPrescriptionText.value || '').trim()
+
+  if (!pastedText) {
+    showToast('Please paste herb names first', 'error')
+    return
+  }
+
+  importingPrescription.value = true
+
+  try {
+    if (!herbs.value.length) {
+      await loadHerbs()
+    }
+
+    const parsed = parsePrescriptionText(pastedText, '')
+
+    if (!parsed.items.length) {
+      throw new Error('No herb names were found. Try one herb per line, or use herb name + dose.')
+    }
+
+    applyImportedPrescription(parsed, 'Pasted Herbs')
+    clearPastedPrescriptionText()
+  } catch (error) {
+    console.error('importPastedPrescription error:', error)
+    clearImportSummary()
+    showToast(error?.message || 'Failed to import pasted herbs', 'error')
+  } finally {
+    importingPrescription.value = false
   }
 }
 
@@ -1744,6 +1940,7 @@ function resetToDefaultRows() {
 
 function clearAll() {
   clearImportSummary()
+  clearPastedPrescriptionText()
   inputRows.value = createDefaultRows()
   notes.value = ''
   prescriptionTitle.value = ''
@@ -2637,6 +2834,77 @@ function goToNextPage() {
   font-weight: 600;
 }
 
+.paste-import-card {
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: 18px;
+  background: #f8fbf9;
+  border: 1px solid #e7eeea;
+}
+
+.paste-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.paste-import-title {
+  color: #173c2f;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.paste-import-subtitle {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.paste-import-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef5f1;
+  color: #184c3b;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.paste-import-textarea {
+  width: 100%;
+  min-height: 112px;
+  border: 1px solid #d8dee7;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  outline: none;
+  background: #fff;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.paste-import-textarea:focus {
+  border-color: #1c5b47;
+  box-shadow: 0 0 0 4px rgba(28, 91, 71, 0.08);
+}
+
+.paste-import-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .input-list {
   display: flex;
   flex-direction: column;
@@ -3420,6 +3688,11 @@ function goToNextPage() {
 
   .header-actions {
     justify-content: flex-start;
+  }
+
+  .paste-import-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .page-header-card h2 {
